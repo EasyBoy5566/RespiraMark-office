@@ -55,7 +55,8 @@ class TelemetryHub:
         st.last_seen = time.time()
         if st.proto != PROTO_VERSION:
             self.log.warning(f"{device} 協議版本 {st.proto} 與伺服器 {PROTO_VERSION} 不同")
-        self.log.info(f"裝置上線: {device}（病人代碼: {st.patient or '—'}）")
+        # 資安規則：病人代碼只顯示在儀表板畫面，禁止寫入 log
+        self.log.info(f"裝置上線: {device}")
         self.broadcast({"type": "link", "device": device, "online": True,
                         "patient": st.patient, "v": st.proto})
         return device, st.conn_seq

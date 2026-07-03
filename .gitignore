@@ -10,3 +10,9 @@ config.json
 # 系統
 .DS_Store
 Thumbs.db
+
+# 測試
+tests/
+
+# claude
+CLAUDE.md

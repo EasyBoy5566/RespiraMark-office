@@ -11,8 +11,8 @@ Pi #1..#5 ──TCP 8765──▶ 本伺服器 ──http://本機:8080──▶
 ## 快速開始
 
 ```bash
-pip install -r requirements.txt
-python server.py            # Windows 也可直接雙擊 start_server.bat
+python -m pip install -r requirements.txt
+python main.py              # Windows 也可直接雙擊 start_server.bat
 ```
 
 啟動後開瀏覽器進 `http://localhost:8080`。畫面出現「等待裝置連線…」即正常。
@@ -22,12 +22,20 @@ python server.py            # Windows 也可直接雙擊 start_server.bat
 另開幾個終端機：
 
 ```bash
-python fake_pi.py --device pi-01 --patient TEST001
-python fake_pi.py --device pi-02 --patient TEST002 --rr 22
-python fake_pi.py --device pi-03 --patient TEST003 --rr 12
+python tools/fake_pi.py --device pi-01 --patient TEST001
+python tools/fake_pi.py --device pi-02 --patient TEST002 --rr 22
+python tools/fake_pi.py --device pi-03 --patient TEST003 --rr 12
 ```
 
 儀表板會即時出現對應床位卡片。**點擊卡片可放大**，看完整量測值/設定值表。
+
+### 自動化冒煙測試（改完程式 push 前必跑）
+
+```bash
+python tests/smoke_test.py
+```
+
+自動完成「啟伺服器（測試 port）→ 跑兩台 fake_pi → 驗證 WS 廣播 → 關閉」，全過才 push。
 
 ## 真實 Pi 接入
 
@@ -66,18 +74,21 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | 醫院 Wi-Fi（筆電） | 改 server_host 為筆電院內 IP | 同一台，不用動 |
 | 醫院電腦 RT004 | 改 server_host 為 172.19.18.70 | 複製本資料夾過去、裝 Python + aiohttp、防火牆請資訊室協助放行 |
 
-## 檔案結構
+## 專案結構（目錄即架構，詳見 CLAUDE.md）
 
-| 檔案 | 用途 |
+| 路徑 | 用途 |
 |---|---|
-| `server.py` | 入口：TCP 接收 + 網頁/WebSocket |
-| `telemetry_hub.py` | 裝置狀態管理與廣播（擴充功能掛這層） |
-| `static/` | 儀表板網頁（原生 HTML/JS，無建置工具） |
-| `fake_pi.py` | Pi 模擬器（純標準庫，真 Pi 上也能跑來測網路） |
+| `main.py` | 唯一進入點（組裝三層） |
+| `monitor/transport/` | 傳輸層：TCP 接收 Pi 資料 |
+| `monitor/domain/` | 領域層：裝置狀態管理與廣播（擴充功能掛這層） |
+| `monitor/web/` | 呈現層：HTTP/WebSocket + `static/` 儀表板前端 |
+| `monitor/config.py` | 設定載入（唯一讀 config.json 的地方） |
+| `tools/fake_pi.py` | Pi 模擬器（純標準庫，真 Pi 上也能跑來測網路） |
+| `tests/smoke_test.py` | 一鍵端對端冒煙測試（push 前必跑） |
 | `PROTOCOL.md` | Pi ↔ 伺服器 ↔ 瀏覽器的資料格式契約 |
 
 ## 疑難排解
 
-- **儀表板一直「等待裝置連線」**：先跑 `fake_pi.py` 排除伺服器問題；再從 Pi 上 `curl http://<伺服器IP>:8080` 測連通（防火牆/網段隔離最常見）
+- **儀表板一直「等待裝置連線」**：先跑 `tools/fake_pi.py` 排除伺服器問題；再從 Pi 上 `curl http://<伺服器IP>:8080` 測連通（防火牆/網段隔離最常見）
 - **波形卡頓**：正常顯示會落後真實時間約 0.5 秒（抖動緩衝）；持續卡頓多半是 Wi-Fi 訊號差
 - **此畫面僅供觀察參考，不可作為臨床警報依據**
