@@ -1,0 +1,5 @@
+{
+    "ingest_port": 8765,
+    "web_port": 8080,
+    "offline_timeout": 5.0
+}
