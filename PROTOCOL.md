@@ -20,7 +20,10 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `params` | 慢數據輪詢後（~5s） | `mode` 通氣模式、`features` 附加功能、`settings` 設定值 dict、`measured` 量測值 dict、`ts` |
 | `status` | 呼吸器連線狀態變化 | `state`（connected / connecting / disconnected）、`msg` 顯示文字、`ts` |
 | `device_info` | 取得設備 ID 後 | `info`：`id`/`name`/`revision`/`medibus`、`ts` |
+| `alarm` | 警報狀態變化時（**全量**） | `alarms` 陣列，每項 `{prio, code, text}`；prio 1~31（31 最高，同 MEDIBUS）；**空陣列 = 全部解除**、`ts` |
 | `ping` | 閒置 ≥2s 心跳 | `ts` |
+
+註：`alarm` 已定義於協議並在伺服器/前端實作；Pi 端的 MEDIBUS 警報輪詢（27H）尚未實作，開發 UI 可用 `tools/fake_pi.py --alarms` 模擬。
 
 伺服器超過 `offline_timeout`（預設 5 秒）沒收到任何訊息 → 判定該裝置離線。
 
@@ -30,7 +33,7 @@ Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另�
 
 | type | 說明 |
 |---|---|
-| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online` 與最新的 `status`/`device_info`/`params` |
+| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`）的最新一則 |
 | `link` | Pi 與伺服器的連線狀態：`online` true/false（上線時附 `patient`）。注意這與 `status`（Pi 與呼吸器的串口狀態）是兩件事 |
 
 ## 版本相容規則

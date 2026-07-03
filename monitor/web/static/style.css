@@ -96,6 +96,18 @@ main#grid {
 .link-status.on  { color: var(--green); }
 .link-status.off { color: var(--red); }
 
+/* ── 警報列（無警報時隱藏；資料由 alarm 訊息驅動）─────────── */
+.alarm-bar {
+  display: flex; flex-wrap: wrap; gap: 4px 16px;
+  padding: 5px 12px;
+  background: rgba(255, 23, 68, 0.14);
+  border-bottom: 1px solid var(--red);
+  font-size: 14px; font-weight: bold;
+  color: var(--red);
+}
+.card.alarming { border-color: var(--red); }
+.card.alarming .card-head { border-left: 4px solid var(--red); }
+
 /* ── 波形區 ─────────────────────────────────────────────── */
 .waves { padding: 6px 10px 2px; }
 .wave-row { position: relative; margin-bottom: 4px; }
@@ -120,7 +132,11 @@ main#grid {
   pointer-events: none;
 }
 
-/* ── 參數列（卡片模式）──────────────────────────────────── */
+/* ── 參數列（卡片模式：顯示呼吸器設定值）────────────────── */
+.strip-cap {
+  font-size: 12px; color: var(--text-label);
+  padding: 4px 12px 0;
+}
 .param-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));

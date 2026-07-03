@@ -1,7 +1,9 @@
-/* RespiraMark Office 儀表板
- * - WebSocket 接收各 Pi 的波形/參數，自動重連
- * - 自適應抖動緩衝：批次到達 → 以估計取樣率平滑消耗 → 60fps 掃描式繪圖
- * - 點擊卡片放大檢視（完整量測/設定表）
+/* RespiraMark Office 儀表板（前端唯一邏輯檔，分工規範見 CLAUDE.md §5）
+ * - WebSocket 接收各 Pi 的波形/參數/警報，自動重連
+ * - 播放引擎：取樣率由「發送端時間戳」估計（不受網路抖動影響）；
+ *   緩衝偏離目標時以 ±15% 微調播放速率，永不暫停 → 波形連續
+ * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）
+ * - 小卡片：三條波形 + 模式 + 設定值 + 警報列；點開顯示所有量測值
  */
 "use strict";
 
@@ -15,14 +17,9 @@ const WINDOW_SEC = 15;      // 波形視窗寬度（秒）
 const GAP_SEC    = 0.5;     // 擦除條寬度（秒）
 const TARGET_BUF = 0.45;    // 目標緩衝深度（秒）：吸收 Wi-Fi 抖動
 const MAX_BUF    = 2.0;     // 緩衝上限（秒）：分頁背景太久直接跳到最新
+const RATE_WIN   = 6.0;     // 秒，取樣率估計的滑動視窗（用發送端 ts）
 const TRIG_COLOR = "rgba(255, 234, 0, 0.55)";
 const GRID_COLOR = "#24364F";
-
-// 卡片參數列顯示的重點項目：[measured 鍵, 單位]
-const STRIP_KEYS = [
-  ["PIP", "mbar"], ["PEEP", "mbar"], ["VT", "mL"], ["RR", "/min"],
-  ["MVe", "L/min"], ["FiO2", "%"], ["etCO2", "mmHg"],
-];
 
 const grid = document.getElementById("grid");
 const overlay = document.getElementById("overlay");
@@ -31,18 +28,18 @@ const connEl = document.getElementById("conn");
 
 const devices = new Map();   // device_id -> Dev
 
-// ── 裝置物件 ─────────────────────────────────────────────────────
+// ── 裝置物件與卡片 ───────────────────────────────────────────────
 function ensureDev(id) {
   let dev = devices.get(id);
   if (dev) return dev;
   dev = {
     id,
     queue: [],            // 待播樣本 {p,f,v,trig}
-    rate: 75,             // 估計取樣率 Hz（EMA）
-    lastArrival: 0,
+    rate: 100,            // 估計取樣率 Hz（由發送端 ts 計算）
+    tsWin: [],            // [{t: 發送端ts, n: 樣本數}] 滑動視窗
     acc: 0,               // 消耗速率的小數累積
     pos: 0,               // 掃描位置（樣本數）
-    chans: [],            // {ctx,w,h,prevY,hist:[]} × 3
+    chans: [],            // {canvas,ctx,valEl,w,h,prevY,hist[]} × 3
     valThrottle: 0,
     big: false,
     card: null,
@@ -68,7 +65,9 @@ function buildCard(dev) {
       <span class="link-status off">● Pi 離線</span>
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
+    <div class="alarm-bar hidden"></div>
     <div class="waves"></div>
+    <div class="strip-cap">設定值</div>
     <div class="param-strip"></div>
     <div class="detail">
       <div><h3>量測值</h3><div class="kv-table measured"></div></div>
@@ -91,14 +90,6 @@ function buildCard(dev) {
     dev.chans.push({ canvas: row.querySelector("canvas"),
                      valEl: row.querySelector(".wave-val"),
                      ctx: null, w: 0, h: 0, prevY: null, hist: [] });
-  }
-
-  const strip = card.querySelector(".param-strip");
-  for (const [k, u] of STRIP_KEYS) {
-    const chip = document.createElement("div");
-    chip.className = "pchip";
-    chip.innerHTML = `<div class="k">${k}</div><div class="val" data-k="${k}">--</div><div class="u">${u}</div>`;
-    strip.appendChild(chip);
   }
 
   card.addEventListener("click", () => { if (!dev.big) expand(dev); });
@@ -156,15 +147,15 @@ function setupCanvases(dev) {
     drawZeroLine(c, CHANNELS[i], 0, c.w);
   }
   // 從歷史重播，畫面不留白
-  const hist = dev.chans[0].hist;
-  if (hist.length) {
-    const start = dev.chans.map((c) => c.hist.slice());
-    dev.chans.forEach((c) => (c.hist = []));
-    for (let s = 0; s < hist.length; s++) {
-      drawSample(dev, {
-        p: start[0][s], f: start[1][s], v: start[2][s], trig: false,
-      }, true);
+  const n = dev.chans[0].hist.length;
+  if (n) {
+    const hist = dev.chans.map((c) => c.hist);
+    const samples = new Array(n);
+    for (let s = 0; s < n; s++) {
+      samples[s] = { p: hist[0][s], f: hist[1][s], v: hist[2][s], trig: false };
     }
+    dev.chans.forEach((c) => (c.hist = []));
+    drawSamples(dev, samples);
   }
 }
 
@@ -183,52 +174,81 @@ function drawZeroLine(c, ch, x0, x1) {
   c.ctx.stroke();
 }
 
-function drawSample(dev, s, replay) {
-  const pxPerSample = dev.chans[0].w / (WINDOW_SEC * dev.rate);
-  let x = dev.pos * pxPerSample;
-  if (x >= dev.chans[0].w) {           // 掃描到底 → 回到左端
-    dev.pos = 0; x = 0;
-    dev.chans.forEach((c) => (c.prevY = null));
-  }
-  const gapPx = Math.max(4, GAP_SEC * dev.rate * pxPerSample);
+/** 把一批樣本畫上去：先算 x 座標與掃描回捲分段，再每通道以單一路徑繪製 */
+function drawSamples(dev, samples) {
+  const n = samples.length;
+  if (!n) return;
+  const w = dev.chans[0].w;
+  const pps = w / (WINDOW_SEC * dev.rate);             // 每樣本的像素寬
+  const gapPx = Math.max(6, GAP_SEC * dev.rate * pps); // 擦除條寬
 
-  for (let i = 0; i < CHANNELS.length; i++) {
-    const ch = CHANNELS[i], c = dev.chans[i];
-    const val = s[ch.key];
-    // 擦除條 + 補回零線
-    c.ctx.clearRect(x + 1, 0, gapPx, c.h);
-    drawZeroLine(c, ch, x + 1, Math.min(x + 1 + gapPx, c.w));
-    // 波形線段
-    const y = yOf(ch, c, val);
-    if (c.prevY !== null) {
-      c.ctx.strokeStyle = ch.color;
-      c.ctx.lineWidth = 2;
-      c.ctx.beginPath();
-      c.ctx.moveTo(x - pxPerSample, c.prevY);
-      c.ctx.lineTo(x, y);
-      c.ctx.stroke();
+  // 1) 算出所有樣本的 x 與「掃描回捲」分段
+  const xs = new Array(n);
+  const segs = [];                     // [{start, end}]（含端點）
+  const wrapAtFirst = dev.pos * pps >= w;   // 第一個樣本就回捲 → 不與上一幀銜接
+  let segStart = 0;
+  let pos = dev.pos;
+  for (let i = 0; i < n; i++) {
+    let x = pos * pps;
+    if (x >= w) {                      // 掃描到底 → 回左端，切新段
+      pos = 0; x = 0;
+      if (i > 0) segs.push({ start: segStart, end: i - 1 });
+      segStart = i;
     }
-    c.prevY = y;
-    // 歷史（重繪用），保留一個視窗的量
-    c.hist.push(val);
+    xs[i] = x;
+    pos++;
+  }
+  segs.push({ start: segStart, end: n - 1 });
+  dev.pos = pos;
+
+  // 2) 每通道：清擦除條 → 補零線 → 單一路徑畫線 → 更新歷史
+  for (let ci = 0; ci < CHANNELS.length; ci++) {
+    const ch = CHANNELS[ci], c = dev.chans[ci], ctx = c.ctx;
+    for (let si = 0; si < segs.length; si++) {
+      const seg = segs[si];
+      const x0 = xs[seg.start];
+      const x1 = Math.min(xs[seg.end] + gapPx, c.w);
+      ctx.clearRect(x0, 0, x1 - x0, c.h);
+      drawZeroLine(c, ch, x0, x1);
+      ctx.strokeStyle = ch.color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      let started = false;
+      // 第一段且非回捲起點 → 與上一幀的最後一點銜接，線才連續
+      if (si === 0 && c.prevY !== null && !wrapAtFirst) {
+        ctx.moveTo(xs[seg.start] - pps, c.prevY);
+        started = true;
+      }
+      for (let i = seg.start; i <= seg.end; i++) {
+        const y = yOf(ch, c, samples[i][ch.key]);
+        if (!started) { ctx.moveTo(xs[i], y); started = true; }
+        else ctx.lineTo(xs[i], y);
+        c.prevY = y;
+      }
+      ctx.stroke();
+    }
+    // 歷史（resize/放大時重播用），保留一個視窗的量
+    for (let i = 0; i < n; i++) c.hist.push(samples[i][ch.key]);
     const cap = Math.ceil(WINDOW_SEC * dev.rate);
     if (c.hist.length > cap) c.hist.splice(0, c.hist.length - cap);
   }
-  // Trigger 標記：底部半透明小三角（畫在壓力圖）
-  if (s.trig && !replay) {
-    const c = dev.chans[0].ctx, h = dev.chans[0].h;
-    c.fillStyle = TRIG_COLOR;
-    c.beginPath();
-    c.moveTo(x, h - 9);
-    c.lineTo(x - 5, h - 1);
-    c.lineTo(x + 5, h - 1);
-    c.closePath();
-    c.fill();
+
+  // 3) Trigger 標記：底部半透明小三角（畫在壓力圖）
+  const pctx = dev.chans[0].ctx, ph = dev.chans[0].h;
+  for (let i = 0; i < n; i++) {
+    if (!samples[i].trig) continue;
+    pctx.fillStyle = TRIG_COLOR;
+    pctx.beginPath();
+    pctx.moveTo(xs[i], ph - 9);
+    pctx.lineTo(xs[i] - 5, ph - 1);
+    pctx.lineTo(xs[i] + 5, ph - 1);
+    pctx.closePath();
+    pctx.fill();
   }
-  dev.pos++;
 }
 
-// ── 播放迴圈：自適應消耗緩衝 ─────────────────────────────────────
+// ── 播放迴圈：緩衝偏離目標 → 播放速率 ±15% 微調，永不暫停 ────────
 let lastFrame = performance.now();
 function frame(now) {
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
@@ -236,18 +256,20 @@ function frame(now) {
 
   for (const dev of devices.values()) {
     const q = dev.queue;
-    if (!q.length) continue;
+    if (!q.length) { dev.acc = 0; continue; }
     // 分頁在背景太久 → 丟掉舊樣本直接追上
-    const maxLen = MAX_BUF * dev.rate;
-    if (q.length > maxLen) q.splice(0, q.length - Math.ceil(TARGET_BUF * dev.rate));
-    // 基礎消耗 = 取樣率；再依緩衝深度微調（比例控制）
+    if (q.length > MAX_BUF * dev.rate) {
+      q.splice(0, q.length - Math.ceil(TARGET_BUF * dev.rate));
+    }
     const target = TARGET_BUF * dev.rate;
-    dev.acc += dev.rate * dt + (q.length - target) * 0.06;
-    let n = Math.floor(dev.acc);
-    if (n <= 0) continue;
-    dev.acc -= n;
-    n = Math.min(n, q.length);
-    for (let i = 0; i < n; i++) drawSample(dev, q.shift(), false);
+    const speed = Math.max(0.85, Math.min(1.15, 1 + (q.length - target) / (target * 4)));
+    dev.acc += dev.rate * speed * dt;
+    let n = Math.min(Math.floor(dev.acc), q.length);
+    if (n > 0) {
+      dev.acc -= n;
+      drawSamples(dev, q.splice(0, n));
+      if (!q.length) dev.acc = 0;      // 消耗到空 → 歸零避免下次爆衝
+    }
     // 每 ~10 幀更新一次即時數值
     if (++dev.valThrottle >= 10) {
       dev.valThrottle = 0;
@@ -263,18 +285,22 @@ requestAnimationFrame(frame);
 
 // ── 訊息處理 ─────────────────────────────────────────────────────
 function onWave(dev, m) {
-  const now = performance.now() / 1000;
-  const n = m.p.length;
-  if (dev.lastArrival) {
-    const gap = now - dev.lastArrival;
-    if (gap > 0.02 && gap < 2.0) {
-      const inst = n / gap;
-      if (inst > 10 && inst < 500) dev.rate = dev.rate * 0.9 + inst * 0.1;
+  const nSamples = m.p.length;
+  // 取樣率估計：用「發送端時間戳」的滑動視窗（不受網路到達抖動影響）
+  const t = typeof m.ts === "number" ? m.ts : Date.now() / 1000;
+  dev.tsWin.push({ t, n: nSamples });
+  while (dev.tsWin.length > 3 && t - dev.tsWin[0].t > RATE_WIN) dev.tsWin.shift();
+  if (dev.tsWin.length >= 3) {
+    const span = t - dev.tsWin[0].t;
+    if (span >= 0.5) {
+      let cnt = 0;
+      for (let i = 1; i < dev.tsWin.length; i++) cnt += dev.tsWin[i].n;
+      const r = cnt / span;
+      if (r >= 20 && r <= 300) dev.rate = r;
     }
   }
-  dev.lastArrival = now;
   const trigSet = new Set(m.trig || []);
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < nSamples; i++) {
     dev.queue.push({ p: m.p[i], f: m.f[i], v: m.v[i], trig: trigSet.has(i) });
   }
 }
@@ -304,20 +330,45 @@ function onStatus(dev, m) {
 }
 
 function onParams(dev, m) {
-  // 模式徽章
+  // 模式徽章（小卡片）與模式行（放大檢視）
   const badge = dev.card.querySelector(".mode-badge");
   const mode = (m.mode || "") + (m.features || []).join("");
   if (mode) { badge.textContent = mode; badge.classList.remove("hidden"); }
   dev.card.querySelector(".mode-line").textContent = mode || "—";
-  // 參數列
-  const measured = m.measured || {};
-  for (const [k] of STRIP_KEYS) {
-    const el = dev.card.querySelector(`.param-strip .val[data-k="${k}"]`);
-    el.textContent = measured[k] !== undefined ? measured[k] : "--";
+  // 小卡片參數列 = 設定值（動態依收到的項目建立）
+  const strip = dev.card.querySelector(".param-strip");
+  strip.innerHTML = "";
+  for (const [k, v] of Object.entries(m.settings || {})) {
+    const chip = document.createElement("div");
+    chip.className = "pchip";
+    chip.innerHTML = `<div class="k"></div><div class="val"></div>`;
+    chip.querySelector(".k").textContent = k;
+    chip.querySelector(".val").textContent = v;
+    strip.appendChild(chip);
   }
-  // 放大檢視的完整表
-  fillTable(dev.card.querySelector(".kv-table.measured"), measured);
+  // 放大檢視：所有量測值 + 設定值
+  fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
   fillTable(dev.card.querySelector(".kv-table.settings"), m.settings || {});
+}
+
+function onAlarm(dev, m) {
+  // 全量更新：alarms 為目前所有警報（空陣列 = 解除），依優先級高→低排序
+  const alarms = (m.alarms || []).slice().sort((a, b) => (b.prio || 0) - (a.prio || 0));
+  const bar = dev.card.querySelector(".alarm-bar");
+  bar.innerHTML = "";
+  if (alarms.length) {
+    for (const a of alarms) {
+      const item = document.createElement("span");
+      item.className = "alarm-item";
+      item.textContent = `⚠ ${a.text || a.code || "ALARM"}`;
+      bar.appendChild(item);
+    }
+    bar.classList.remove("hidden");
+    dev.card.classList.add("alarming");
+  } else {
+    bar.classList.add("hidden");
+    dev.card.classList.remove("alarming");
+  }
 }
 
 function fillTable(el, obj) {
@@ -339,27 +390,28 @@ function onDeviceInfo(dev, m) {
     `設備: ${i.name || "—"}  ID:${i.id || "—"}  Rev:${i.revision || "—"}  MEDIBUS:${i.medibus || "—"}`;
 }
 
+// 訊息類型 → 處理函式（新增有狀態類型：加一行 + 寫 onXxx，snapshot 自動生效）
+const MSG_HANDLERS = {
+  wave: onWave, link: onLink, status: onStatus,
+  params: onParams, device_info: onDeviceInfo, alarm: onAlarm,
+};
+const SNAPSHOT_KEYS = ["status", "params", "device_info", "alarm"];
+
 function dispatch(m) {
   if (m.type === "snapshot") {
     for (const d of m.devices || []) {
       const dev = ensureDev(d.device);
       onLink(dev, { online: d.online, patient: d.patient });
-      if (d.status) onStatus(dev, d.status);
-      if (d.params) onParams(dev, d.params);
-      if (d.device_info) onDeviceInfo(dev, d.device_info);
+      for (const k of SNAPSHOT_KEYS) {
+        if (d[k]) MSG_HANDLERS[k](dev, d[k]);
+      }
     }
     return;
   }
   if (!m.device) return;
-  const dev = ensureDev(m.device);
-  switch (m.type) {
-    case "wave":        onWave(dev, m); break;
-    case "link":        onLink(dev, m); break;
-    case "status":      onStatus(dev, m); break;
-    case "params":      onParams(dev, m); break;
-    case "device_info": onDeviceInfo(dev, m); break;
-    default: break;     // 未知類型：忽略（向前相容）
-  }
+  const handler = MSG_HANDLERS[m.type];
+  if (handler) handler(ensureDev(m.device), m);
+  // 未知類型：忽略（向前相容）
 }
 
 // ── WebSocket（自動重連）─────────────────────────────────────────

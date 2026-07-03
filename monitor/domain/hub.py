@@ -15,6 +15,13 @@ import time
 
 PROTO_VERSION = 1
 
+# 有狀態的訊息類型：保留最新一則，供 snapshot 給新連入的瀏覽器。
+# 擴充新類型（依 PROTOCOL.md 先定義）只需在此加一項，Hub 其餘程式不用動。
+STATEFUL_TYPES = ("status", "device_info", "params", "alarm")
+
+# 串流類型：即時轉發、不保留
+STREAM_TYPES = ("wave",)
+
 
 class DeviceState:
     """單一 Pi 裝置的最新狀態（供 snapshot 用）"""
@@ -26,9 +33,7 @@ class DeviceState:
         self.last_seen = 0.0
         self.conn_seq = 0          # 連線世代：舊 TCP 連線的殘留事件不得覆蓋新連線
         self.proto = None
-        self.status = None         # 最新 status 訊息（Pi ↔ 呼吸器串口狀態）
-        self.device_info = None
-        self.params = None
+        self.latest = {}           # type -> 最新一則訊息（僅 STATEFUL_TYPES）
 
 
 class TelemetryHub:
@@ -73,13 +78,9 @@ class TelemetryHub:
         t = msg.get("type")
         if t == "ping":
             return                       # 心跳只更新 last_seen，不轉發
-        if t == "status":
-            st.status = msg
-        elif t == "device_info":
-            st.device_info = msg
-        elif t == "params":
-            st.params = msg
-        elif t != "wave":
+        if t in STATEFUL_TYPES:
+            st.latest[t] = msg
+        elif t not in STREAM_TYPES:
             self.log.info(f"{device} 未知訊息類型（忽略）: {t}")
             return
         self.broadcast(dict(msg, device=device))
@@ -113,12 +114,7 @@ class TelemetryHub:
         for st in self.devices.values():
             d = {"device": st.device, "patient": st.patient,
                  "online": st.online, "v": st.proto}
-            if st.status:
-                d["status"] = st.status
-            if st.device_info:
-                d["device_info"] = st.device_info
-            if st.params:
-                d["params"] = st.params
+            d.update(st.latest)          # 各 STATEFUL_TYPES 的最新一則
             devs.append(d)
         return {"type": "snapshot", "devices": devs}
 

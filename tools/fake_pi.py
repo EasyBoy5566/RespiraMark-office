@@ -93,6 +93,8 @@ def send_lines(sock, msgs):
 def run_session(args, model):
     sock = socket.create_connection((args.host, args.port), timeout=3.0)
     sock.settimeout(2.0)
+    # 關閉 Nagle：小批次立即送出，避免黏包造成到達時間抖動
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     print(f"[{args.device}] 已連線 {args.host}:{args.port}")
     send_lines(sock, [
         {"type": "hello", "v": 1, "device": args.device, "patient": args.patient},
@@ -106,6 +108,8 @@ def run_session(args, model):
     next_sample = time.monotonic()
     next_flush = next_sample + FLUSH_INTERVAL
     next_params = next_sample + PARAMS_INTERVAL
+    next_alarm = next_sample if args.alarms else None   # 啟用時立刻發第一則
+    alarm_on = False
     dt = 1.0 / SAMPLE_RATE
 
     while True:
@@ -126,6 +130,17 @@ def run_session(args, model):
         if now >= next_params:
             send_lines(sock, [model.params()])
             next_params = now + PARAMS_INTERVAL
+        if next_alarm is not None and now >= next_alarm:
+            alarm_on = not alarm_on                # 每 20 秒切換 觸發/解除
+            alarms = []
+            if alarm_on:
+                alarms.append({"prio": 28, "code": "10", "text": "PAW HIGH"})
+                if random.random() < 0.5:
+                    alarms.append({"prio": 12, "code": "4B", "text": "BATTERY LOW"})
+            send_lines(sock, [{"type": "alarm", "alarms": alarms}])
+            print(f"[{args.device}] 警報 {'觸發' if alarm_on else '解除'}: "
+                  f"{[a['text'] for a in alarms] or '—'}")
+            next_alarm = now + 20.0
         time.sleep(0.01)
 
 
@@ -136,6 +151,8 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--rr", type=float, default=15.0, help="呼吸頻率 (預設 15)")
+    ap.add_argument("--alarms", action="store_true",
+                    help="模擬警報：啟動即觸發，之後每 20 秒切換觸發/解除（開發警報 UI 用）")
     args = ap.parse_args()
 
     model = BreathModel(rr=args.rr)
