@@ -37,9 +37,10 @@ class DeviceState:
 
 
 class TelemetryHub:
-    def __init__(self, offline_timeout: float = 5.0):
+    def __init__(self, offline_timeout: float = 5.0, max_devices: int = 16):
         self.log = logging.getLogger("hub")
         self.offline_timeout = offline_timeout
+        self.max_devices = max_devices
         self.devices = {}          # device_id -> DeviceState
         self.viewers = set()       # 每個瀏覽器一個 asyncio.Queue
         self._seq = 0
@@ -47,10 +48,14 @@ class TelemetryHub:
     # ── Pi 端事件（由 ingest 呼叫）──────────────────────────────────
 
     def device_hello(self, msg: dict):
-        """裝置上線。回傳 (device_id, conn_seq) 給該連線後續使用。"""
+        """裝置上線。回傳 (device_id, conn_seq) 給該連線後續使用；
+        新裝置超過 max_devices 上限時回傳 None（既有裝置重連不受影響）。"""
         device = str(msg.get("device") or "unknown")
         st = self.devices.get(device)
         if st is None:
+            if len(self.devices) >= self.max_devices:
+                self.log.warning(f"裝置數已達上限 {self.max_devices}，拒絕新裝置 {device}")
+                return None
             st = self.devices[device] = DeviceState(device)
         self._seq += 1
         st.conn_seq = self._seq

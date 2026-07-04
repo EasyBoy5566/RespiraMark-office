@@ -62,8 +62,10 @@ async def main():
     cfg = load_config(args.config)
 
     # 組裝三層
-    hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]))
-    ingest_server = await start_ingest(hub, int(cfg["ingest_port"]))
+    hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
+                       max_devices=int(cfg["max_devices"]))
+    ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
+                                       token=str(cfg["ingest_token"] or ""))
     web_runner = await start_web(hub, int(cfg["web_port"]))
     watchdog = asyncio.ensure_future(hub.watchdog())
 

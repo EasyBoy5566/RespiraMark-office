@@ -1,5 +1,7 @@
 {
     "ingest_port": 8765,
     "web_port": 8080,
-    "offline_timeout": 5.0
+    "offline_timeout": 5.0,
+    "ingest_token": "",
+    "max_devices": 16
 }

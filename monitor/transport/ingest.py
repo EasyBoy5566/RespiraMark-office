@@ -16,8 +16,8 @@ MAX_LINE = 512 * 1024      # 單行訊息上限（防禦異常資料）
 READ_LIMIT = 1024 * 1024   # asyncio stream 讀取緩衝上限
 
 
-async def handle_ingest(reader, writer, hub):
-    """單一 Pi 連線的生命週期：hello → 持續收訊息 → 斷線通知 Hub"""
+async def handle_ingest(reader, writer, hub, token=""):
+    """單一 Pi 連線的生命週期：hello（含 token 驗證）→ 持續收訊息 → 斷線通知 Hub"""
     log = logging.getLogger("ingest")
     peer = writer.get_extra_info("peername")
     device = None
@@ -43,7 +43,15 @@ async def handle_ingest(reader, writer, hub):
                 if msg.get("type") != "hello":
                     log.warning(f"{peer} 第一則訊息不是 hello，斷線")
                     break
-                device, conn_seq = hub.device_hello(msg)
+                # token 驗證（見 PROTOCOL.md）；注意：token 值不得寫入 log
+                if token and msg.get("token") != token:
+                    log.warning(f"{peer} token 驗證失敗，斷線")
+                    break
+                accepted = hub.device_hello(msg)
+                if accepted is None:
+                    log.warning(f"{peer} 裝置數已達上限，拒絕連線")
+                    break
+                device, conn_seq = accepted
             else:
                 hub.device_message(device, conn_seq, msg)
     except (ConnectionResetError, OSError):
@@ -56,9 +64,9 @@ async def handle_ingest(reader, writer, hub):
             pass
 
 
-async def start_ingest(hub, port: int):
-    """啟動 TCP 接收伺服器"""
+async def start_ingest(hub, port: int, token: str = ""):
+    """啟動 TCP 接收伺服器；token 非空時對所有連線做 hello 驗證"""
     return await asyncio.start_server(
-        lambda r, w: handle_ingest(r, w, hub),
+        lambda r, w: handle_ingest(r, w, hub, token),
         "0.0.0.0", port, limit=READ_LIMIT,
     )

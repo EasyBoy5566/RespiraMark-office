@@ -96,8 +96,11 @@ def run_session(args, model):
     # 關閉 Nagle：小批次立即送出，避免黏包造成到達時間抖動
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     print(f"[{args.device}] 已連線 {args.host}:{args.port}")
+    hello = {"type": "hello", "v": 1, "device": args.device, "patient": args.patient}
+    if args.token:
+        hello["token"] = args.token
     send_lines(sock, [
-        {"type": "hello", "v": 1, "device": args.device, "patient": args.patient},
+        hello,
         {"type": "status", "state": "connected", "msg": "已連線（模擬）"},
         {"type": "device_info", "info": {"id": "5030", "name": "Savina 300 (Fake)",
                                          "revision": "9.99", "medibus": "6.00"}},
@@ -151,6 +154,8 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--rr", type=float, default=15.0, help="呼吸頻率 (預設 15)")
+    ap.add_argument("--token", default="",
+                    help="hello 的存取權杖（伺服器 config.json 有設 ingest_token 時必填）")
     ap.add_argument("--alarms", action="store_true",
                     help="模擬警報：啟動即觸發，之後每 20 秒切換觸發/解除（開發警報 UI 用）")
     args = ap.parse_args()

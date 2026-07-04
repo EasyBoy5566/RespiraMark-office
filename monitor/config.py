@@ -15,6 +15,8 @@ DEFAULTS = {
     "ingest_port": 8765,      # Pi 連入的 TCP port
     "web_port": 8080,         # 瀏覽器網頁 port
     "offline_timeout": 5.0,   # 秒，無資料判定裝置離線
+    "ingest_token": "",       # Pi 連入的存取權杖；空字串 = 不驗證（僅限開發環境）
+    "max_devices": 16,        # 裝置數上限，超過即拒絕新裝置（防範記憶體被塞爆）
 }
 
 

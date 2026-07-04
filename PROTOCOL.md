@@ -13,9 +13,11 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 
 連線後第一則必須是 `hello`，否則伺服器斷線。
 
+**存取驗證**：伺服器 `config.json` 設定了 `ingest_token`（非空字串）時，`hello` 必須帶 `token` 欄位且值相符，否則伺服器記 log 後直接斷線；伺服器未設定則忽略此欄位。裝置數達 `max_devices` 上限時，新裝置的 `hello` 一律拒絕（既有裝置重連不受影響）。token 走明文 TCP，僅用於院內網隔離閒雜裝置，不可視為對抗攻擊者的防線。
+
 | type | 時機 | 欄位 |
 |---|---|---|
-| `hello` | 連線後第一則 | `v` 協議版本、`device` 機台編號（hostname）、`patient` 病人代碼、`ts` |
+| `hello` | 連線後第一則 | `v` 協議版本、`device` 機台編號（hostname）、`patient` 病人代碼、`token` 存取權杖（見上）、`ts` |
 | `wave` | 每 ~150ms 一批 | `p`/`f`/`v` 等長陣列（壓力 cmH₂O、流量 L/min、容積 mL）、`trig` 觸發樣本的 index 陣列、`ts` |
 | `params` | 慢數據輪詢後（~5s） | `mode` 通氣模式、`features` 附加功能、`settings` 設定值 dict、`measured` 量測值 dict、`ts` |
 | `status` | 呼吸器連線狀態變化 | `state`（connected / connecting / disconnected）、`msg` 顯示文字、`ts` |

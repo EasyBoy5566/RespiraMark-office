@@ -65,6 +65,8 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `ingest_port` | 8765 | Pi 連入的 TCP port |
 | `web_port` | 8080 | 瀏覽器網頁 port |
 | `offline_timeout` | 5.0 | 幾秒沒資料判定 Pi 離線 |
+| `ingest_token` | （空） | Pi 連入的存取權杖；設定後 Pi 端 telemetry.json 的 `token` 必須一致才能連入。空字串 = 不驗證（僅限開發環境，**部署前務必設定**） |
+| `max_devices` | 16 | 裝置數上限，超過即拒絕新裝置 |
 
 ## 換環境部署（家裡 → 醫院）
 
