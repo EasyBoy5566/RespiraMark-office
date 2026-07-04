@@ -4,22 +4,23 @@
  *   緩衝偏離目標時以 ±15% 微調播放速率，永不暫停 → 波形連續
  * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）
  * - 小卡片：三條波形 + 模式 + 設定值 + 警報列；點開顯示所有量測值
+ * - 深/淺色主題：顏色一律讀 style.css 的 CSS 變數，切換時從歷史重播波形
  */
 "use strict";
 
-// ── 常數（沿用 Pi 端 WaveformConfig）─────────────────────────────
+// ── 常數（沿用 Pi 端 WaveformConfig；繪圖顏色由 refreshThemeColors 填入）──
 const CHANNELS = [
-  { key: "p", label: "Paw cmH₂O", color: "#4FC3F7", min: -5,  max: 45,   zero: 0 },
-  { key: "f", label: "Flow L/min", color: "#00E5FF", min: -50, max: 50,   zero: 0 },
-  { key: "v", label: "Vol mL",     color: "#76FF03", min: 0,   max: 1000, zero: 0 },
+  { key: "p", label: "Paw cmH₂O", colorVar: "--c-pressure", color: "", min: -5,  max: 45,   zero: 0 },
+  { key: "f", label: "Flow L/min", colorVar: "--c-flow",     color: "", min: -50, max: 50,   zero: 0 },
+  { key: "v", label: "Vol mL",     colorVar: "--c-volume",   color: "", min: 0,   max: 1000, zero: 0 },
 ];
 const WINDOW_SEC = 15;      // 波形視窗寬度（秒）
 const GAP_SEC    = 0.5;     // 擦除條寬度（秒）
-const TARGET_BUF = 0.45;    // 目標緩衝深度（秒）：吸收 Wi-Fi 抖動
-const MAX_BUF    = 2.0;     // 緩衝上限（秒）：分頁背景太久直接跳到最新
+const TARGET_BUF = 1.2;     // 目標緩衝深度（秒）：吸收院內/訪客網路的卡頓（以延遲換連續）
+const MAX_BUF    = 4.0;     // 緩衝上限（秒）：分頁背景太久直接跳到最新
 const RATE_WIN   = 6.0;     // 秒，取樣率估計的滑動視窗（用發送端 ts）
-const TRIG_COLOR = "rgba(255, 234, 0, 0.55)";
-const GRID_COLOR = "#24364F";
+let TRIG_COLOR = "";        // 依主題由 refreshThemeColors() 填入
+let GRID_COLOR = "";
 
 const grid = document.getElementById("grid");
 const overlay = document.getElementById("overlay");
@@ -27,6 +28,34 @@ const emptyHint = document.getElementById("empty");
 const connEl = document.getElementById("conn");
 
 const devices = new Map();   // device_id -> Dev
+
+// ── 主題（深色預設 / 淺色；選擇存 localStorage）──────────────────
+const themeBtn = document.getElementById("themeToggle");
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function refreshThemeColors() {
+  GRID_COLOR = cssVar("--grid");
+  TRIG_COLOR = cssVar("--trig");
+  for (const ch of CHANNELS) ch.color = cssVar(ch.colorVar);
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("rm-theme", theme); } catch (e) { /* 私密瀏覽等，忽略 */ }
+  themeBtn.textContent = theme === "light" ? "🌙 深色" : "☀ 淺色";
+  refreshThemeColors();
+  devices.forEach(setupCanvases);   // 用新顏色從歷史重播波形
+}
+
+themeBtn.addEventListener("click", () =>
+  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
+
+let initTheme = "dark";
+try { initTheme = localStorage.getItem("rm-theme") || "dark"; } catch (e) { /* 同上 */ }
+applyTheme(initTheme);
 
 // ── 裝置物件與卡片 ───────────────────────────────────────────────
 function ensureDev(id) {
@@ -85,7 +114,7 @@ function buildCard(dev) {
     row.className = "wave-row";
     row.innerHTML = `<canvas></canvas>
       <span class="wave-label ${ch.key}">${ch.label}</span>
-      <span class="wave-val" style="color:${ch.color}">--</span>`;
+      <span class="wave-val ${ch.key}">--</span>`;
     waves.appendChild(row);
     dev.chans.push({ canvas: row.querySelector("canvas"),
                      valEl: row.querySelector(".wave-val"),

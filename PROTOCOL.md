@@ -25,7 +25,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `alarm` | 警報狀態變化時（**全量**） | `alarms` 陣列，每項 `{prio, code, text}`；prio 1~31（31 最高，同 MEDIBUS）；**空陣列 = 全部解除**、`ts` |
 | `ping` | 閒置 ≥2s 心跳 | `ts` |
 
-註：`alarm` 已定義於協議並在伺服器/前端實作；Pi 端的 MEDIBUS 警報輪詢（27H）尚未實作，開發 UI 可用 `tools/fake_pi.py --alarms` 模擬。
+註：`alarm` 全鏈已實作——Pi 端隨慢數據輪詢（MEDIBUS 27H/2EH，約每 5 秒）取得警報，內容變化時全量送出；開發 UI 亦可用 `tools/fake_pi.py --alarms` 模擬。
 
 伺服器超過 `offline_timeout`（預設 5 秒）沒收到任何訊息 → 判定該裝置離線。
 

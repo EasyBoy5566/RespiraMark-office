@@ -1,4 +1,6 @@
-/* RespiraMark Office — Dark Medical Theme（沿用 Pi 端官方色盤） */
+/* RespiraMark Office — 深色（預設，沿用 Pi 端官方色盤）＋ 淺色雙主題
+ * 切換：html[data-theme="light"]（由 app.js 的主題按鈕設定，存 localStorage）
+ * JS 繪圖用色（波形/格線/觸發標記）一律讀這裡的變數，禁止在 JS 寫死 */
 
 :root {
   --bg-primary:   #0B1320;
@@ -16,6 +18,33 @@
   --c-pressure: #4FC3F7;
   --c-flow:     #00E5FF;
   --c-volume:   #76FF03;
+  --grid:       #24364F;                    /* 波形零線/格線 */
+  --trig:       rgba(255, 234, 0, 0.55);    /* Trigger 標記（#FFEA00 半透明） */
+  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 警報列底色 */
+  --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
+}
+
+/* 淺色主題：波形改用深一階的同色系，否則螢光色在白底上看不清 */
+[data-theme="light"] {
+  --bg-primary:   #EDF1F7;
+  --bg-secondary: #FFFFFF;
+  --card-bg:      #FFFFFF;
+  --hover:        #DCE5F0;
+  --divider:      #C3CFDE;
+  --text-primary:   #17263C;
+  --text-secondary: #46586F;
+  --text-label:     #5D7189;
+  --text-disabled:  #9AA8BA;
+  --green:  #00913C;
+  --amber:  #B26E00;
+  --red:    #D50000;
+  --c-pressure: #0277BD;
+  --c-flow:     #00838F;
+  --c-volume:   #33691E;
+  --grid:       #C3CFDE;
+  --trig:       rgba(191, 144, 0, 0.6);
+  --alarm-bg:   rgba(213, 0, 0, 0.08);
+  --overlay-bg: rgba(237, 241, 247, 0.96);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -40,6 +69,16 @@ header {
 #clock { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .conn.online  { color: var(--green); }
 .conn.offline { color: var(--red); }
+.theme-btn {
+  font-size: 14px;
+  color: var(--text-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.theme-btn:hover { background: var(--hover); color: var(--text-primary); }
 
 /* ── 卡片格線：固定兩欄（窄螢幕/手機退回一欄）──────────────── */
 main#grid {
@@ -100,7 +139,7 @@ main#grid {
 .alarm-bar {
   display: flex; flex-wrap: wrap; gap: 4px 16px;
   padding: 5px 12px;
-  background: rgba(255, 23, 68, 0.14);
+  background: var(--alarm-bg);
   border-bottom: 1px solid var(--red);
   font-size: 14px; font-weight: bold;
   color: var(--red);
@@ -131,6 +170,9 @@ main#grid {
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
+.wave-val.p { color: var(--c-pressure); }
+.wave-val.f { color: var(--c-flow); }
+.wave-val.v { color: var(--c-volume); }
 
 /* ── 參數列（卡片模式：顯示呼吸器設定值）────────────────── */
 .strip-cap {
@@ -157,7 +199,7 @@ main#grid {
 /* ── 放大檢視（overlay）─────────────────────────────────── */
 .overlay {
   position: fixed; inset: 0; z-index: 20;
-  background: rgba(11, 19, 32, 0.96);
+  background: var(--overlay-bg);
   padding: 16px;
   overflow-y: auto;
 }

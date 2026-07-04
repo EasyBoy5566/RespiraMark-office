@@ -29,13 +29,14 @@ python tools/fake_pi.py --device pi-03 --patient TEST003 --alarms   # 含模擬�
 
 儀表板即時出現對應床位卡片：三條波形 + 通氣模式 + 設定值（有警報時卡片頂端顯示紅色警報列）。**點擊卡片放大**可看所有量測值。
 
-### 自動化冒煙測試（改完程式 push 前必跑）
+### 自動化測試（改完程式 push 前必跑）
 
 ```bash
-python tests/smoke_test.py
+python -m unittest discover -s tests -v   # hub 單元測試（純標準庫，秒級）
+python tests/smoke_test.py                # 端對端冒煙測試
 ```
 
-自動完成「啟伺服器（測試 port）→ 跑兩台 fake_pi → 驗證 WS 廣播 → 關閉」，全過才 push。
+冒煙測試自動完成「啟伺服器（測試 port）→ 跑兩台 fake_pi → 驗證 token 與 WS 廣播 → 關閉」，兩者全過才 push。
 
 ## 真實 Pi 接入
 
