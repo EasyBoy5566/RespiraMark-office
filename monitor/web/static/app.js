@@ -88,10 +88,15 @@ function buildCard(dev) {
     <div class="card-head">
       <span class="dev-name"></span>
       <span class="patient"></span>
-      <span class="mode-badge hidden"></span>
       <span class="spacer"></span>
-      <span class="vent-status">—</span>
-      <span class="link-status off">● Pi 離線</span>
+      <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
+        <span class="status-tag">呼吸器</span>
+        <span class="vent-status">—</span>
+      </span>
+      <span class="status-group" title="這台 Pi 與中央伺服器之間的網路連線狀態">
+        <span class="status-tag">伺服器</span>
+        <span class="link-status off">● 離線</span>
+      </span>
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
     <div class="alarm-bar hidden"></div>
@@ -258,8 +263,10 @@ function drawSamples(dev, samples) {
       ctx.stroke();
     }
     // 歷史（resize/放大時重播用），保留一個視窗的量
+    // 用 floor 而非 ceil：確保保留樣本數不超過畫面寬度對應的樣本數，
+    // 否則重播（resize/切換主題）後掃描位置會提前一點點回捲，波形每次都往左偏。
     for (let i = 0; i < n; i++) c.hist.push(samples[i][ch.key]);
-    const cap = Math.ceil(WINDOW_SEC * dev.rate);
+    const cap = Math.floor(WINDOW_SEC * dev.rate);
     if (c.hist.length > cap) c.hist.splice(0, c.hist.length - cap);
   }
 
@@ -339,12 +346,16 @@ function onLink(dev, m) {
   if (m.online) {
     dev.card.classList.remove("pi-offline");
     el.className = "link-status on";
-    el.textContent = "● Pi 連線";
+    el.textContent = "已連線";
     if (m.patient !== undefined) setPatient(dev, m.patient);
   } else {
     dev.card.classList.add("pi-offline");
     el.className = "link-status off";
-    el.textContent = "● Pi 離線";
+    el.textContent = "離線";
+    // Pi 離線後呼吸器連線狀態已不可信（斷線前的舊資料），清空避免顯示矛盾
+    const vent = dev.card.querySelector(".vent-status");
+    vent.className = "vent-status";
+    vent.textContent = "—";
   }
 }
 
@@ -359,15 +370,17 @@ function onStatus(dev, m) {
 }
 
 function onParams(dev, m) {
-  // 模式徽章（小卡片）與模式行（放大檢視）
-  const badge = dev.card.querySelector(".mode-badge");
   const mode = (m.mode || "") + (m.features || []).join("");
-  if (mode) { badge.textContent = mode; badge.classList.remove("hidden"); }
   dev.card.querySelector(".mode-line").textContent = mode || "—";
+
+  // 通氣模式本質上也是一種設定值（跟 PEEP、RR 一樣是醫護會查看的呼吸器設定），
+  // 放在設定值清單最前面（小卡片格子與放大檢視的設定值表格都會顯示）
+  const settings = mode ? { Mode: mode, ...(m.settings || {}) } : (m.settings || {});
+
   // 小卡片參數列 = 設定值（動態依收到的項目建立）
   const strip = dev.card.querySelector(".param-strip");
   strip.innerHTML = "";
-  for (const [k, v] of Object.entries(m.settings || {})) {
+  for (const [k, v] of Object.entries(settings)) {
     const chip = document.createElement("div");
     chip.className = "pchip";
     chip.innerHTML = `<div class="k"></div><div class="val"></div>`;
@@ -377,7 +390,7 @@ function onParams(dev, m) {
   }
   // 放大檢視：所有量測值 + 設定值
   fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
-  fillTable(dev.card.querySelector(".kv-table.settings"), m.settings || {});
+  fillTable(dev.card.querySelector(".kv-table.settings"), settings);
 }
 
 function onAlarm(dev, m) {
@@ -448,7 +461,7 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
-    connEl.textContent = "● 已連線";
+    connEl.textContent = "伺服器已啟動";
     connEl.className = "conn online";
   };
   ws.onmessage = (ev) => {

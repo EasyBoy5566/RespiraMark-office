@@ -120,14 +120,20 @@ main#grid {
 }
 .dev-name { font-weight: bold; font-size: 15px; }
 .patient  { color: var(--text-secondary); font-size: 13px; }
-.mode-badge {
-  font-size: 13px; font-weight: bold;
-  color: var(--c-pressure);
-  border: 1px solid var(--divider);
-  border-radius: 5px; padding: 1px 8px;
-}
 .spacer { flex: 1; }
-.vent-status { font-size: 14px; font-weight: bold; }
+
+/* 狀態小方塊：標籤（灰）+ 狀態文字（依連線狀態上色），避免兩種狀態並排時看不出各自代表什麼 */
+.status-group {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  padding: 1px 8px;
+}
+.status-tag {
+  font-size: 11px; font-weight: bold;
+  color: var(--text-label);
+}
+.vent-status { font-size: 13px; font-weight: bold; color: var(--text-secondary); }
 .vent-status.connected    { color: var(--green); }
 .vent-status.connecting   { color: var(--amber); }
 .vent-status.disconnected { color: var(--red); }
@@ -156,7 +162,7 @@ main#grid {
   border: 1px solid var(--divider);
   border-radius: 4px;
 }
-.card.big .wave-row canvas { height: 150px; }
+.card.big .wave-row canvas { height: 120px; }
 .wave-label {
   position: absolute; top: 2px; left: 7px;
   font-size: 11px; font-weight: bold; pointer-events: none;
@@ -203,7 +209,9 @@ main#grid {
   padding: 16px;
   overflow-y: auto;
 }
-.overlay .card { cursor: default; max-width: 1400px; margin: 0 auto; }
+.overlay .card { cursor: default; max-width: 1400px; margin: 0 auto; overflow: visible; }
+/* 放大時內容常高過視窗，狀態列固定在頂端，捲動看明細也看得到連線狀態 */
+.card.big .card-head { position: sticky; top: 0; z-index: 5; }
 .close-btn {
   font-size: 15px; font-weight: bold;
   color: var(--text-secondary);
