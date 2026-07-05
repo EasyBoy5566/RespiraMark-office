@@ -21,6 +21,8 @@ DEFAULTS = {
     "sys_history_max": 720,
     # 系統狀態長期落地目錄（相對專案根目錄；空字串 = 不落地，只留記憶體歷史）
     "sys_log_dir": "sys_logs",
+    # 秒，CSV 寫入節流間隔：只影響長期落地檔，不影響即時畫面/記憶體歷史（仍隨 Pi 送出頻率更新）
+    "sys_csv_interval": 60.0,
 }
 
 

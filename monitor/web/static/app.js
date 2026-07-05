@@ -19,12 +19,14 @@ const CHANNELS = [
 const SYS_METRICS = [
   { key: "cpu",      label: "CPU",  unit: "%",  min: 0, max: 100, warn: 85, crit: 95 },
   { key: "mem",      label: "記憶體", unit: "%", min: 0, max: 100, warn: 85, crit: 95 },
-  { key: "temp",     label: "溫度",  unit: "°C", min: 0, max: 90,  warn: 70, crit: 80 },
+  { key: "temp",     label: "溫度",  unit: "°C", min: 0, max: 90,  warn: 60, crit: 80 },
   { key: "disk_pct", label: "磁碟",  unit: "%",  min: 0, max: 100, warn: 85, crit: 95 },
 ];
+// 這幾項移到卡片頭排（裝置名稱/連線狀態那一列）；sys-strip 只留降頻旗標（正常時不顯示）
+const HEAD_SYS_KEYS = new Set(["cpu", "mem", "temp", "disk_pct"]);
 const SYS_HIST_MAX = 1000;  // 前端每台裝置保留的 sys 樣本上限（趨勢圖用）
 
-const WINDOW_SEC = 15;      // 波形視窗寬度（秒）
+const WINDOW_SEC = 20;      // 波形視窗寬度（秒）
 const GAP_SEC    = 0.5;     // 擦除條寬度（秒）
 const TARGET_BUF = 1.2;     // 目標緩衝深度（秒）：吸收院內/訪客網路的卡頓（以延遲換連續）
 const MAX_BUF    = 4.0;     // 緩衝上限（秒）：分頁背景太久直接跳到最新
@@ -107,6 +109,7 @@ function buildCard(dev) {
       <span class="dev-name"></span>
       <span class="patient"></span>
       <span class="spacer"></span>
+      <span class="sys-mini" title="這台 Pi 的系統狀態（CPU／記憶體／溫度／磁碟）"></span>
       <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
         <span class="status-tag">呼吸器</span>
         <span class="vent-status">—</span>
@@ -118,7 +121,7 @@ function buildCard(dev) {
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
     <div class="alarm-bar hidden"></div>
-    <div class="sys-strip" title="這台 Pi 的系統狀態（CPU／記憶體／溫度／磁碟）"></div>
+    <div class="sys-strip" title="降頻／欠壓旗標（正常時不顯示）"></div>
     <div class="waves"></div>
     <div class="strip-cap">設定值</div>
     <div class="param-strip"></div>
@@ -352,18 +355,19 @@ function sysLevel(metric, value) {
   return "";
 }
 
-/** 卡片常駐小字列：CPU / 溫度 / 記憶體 / 磁碟，異常變黃/紅；降頻另標紅旗 */
+/** 卡片頭排（CPU/記憶體/溫度）+ 頭排下方 sys-strip（磁碟 + 降頻旗標）；異常變黃/紅 */
 function renderSysStrip(dev, m) {
+  const head = dev.card.querySelector(".sys-mini");
   const strip = dev.card.querySelector(".sys-strip");
+  head.innerHTML = "";
   strip.innerHTML = "";
-  strip.classList.remove("hidden");
   for (const metric of SYS_METRICS) {
     const v = m[metric.key];
     const chip = document.createElement("span");
     chip.className = `sys-chip ${sysLevel(metric, v)}`;
     const txt = v === null || v === undefined || v === "" ? "—" : Math.round(v);
     chip.textContent = `${metric.label} ${txt}${v === null ? "" : metric.unit}`;
-    strip.appendChild(chip);
+    (HEAD_SYS_KEYS.has(metric.key) ? head : strip).appendChild(chip);
   }
   // 過熱/欠壓降頻旗標（"0x0" = 正常；非 0 才顯示，且一律紅）
   if (m.throttled && m.throttled !== "0x0") {

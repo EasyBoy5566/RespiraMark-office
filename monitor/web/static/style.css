@@ -124,6 +124,10 @@ main#grid {
 .patient  { color: var(--text-secondary); font-size: 13px; }
 .spacer { flex: 1; }
 
+/* CPU/記憶體/溫度：頭排常駐小字（沿用 .sys-chip 樣式，見下方）*/
+.sys-mini { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sys-mini:empty { display: none; }
+
 /* 狀態小方塊：標籤（灰）+ 狀態文字（依連線狀態上色），避免兩種狀態並排時看不出各自代表什麼 */
 .status-group {
   display: inline-flex; align-items: center; gap: 6px;
@@ -261,6 +265,7 @@ main#grid {
   border: 1px solid var(--divider);
   border-radius: 4px;
   padding: 1px 7px;
+  font-size: 12px;                  /* 寫死，不依賴外層容器字級（曾在頭排失去繼承來源而變大）*/
   font-variant-numeric: tabular-nums;
 }
 .sys-chip.warn { color: var(--amber); border-color: var(--amber); }

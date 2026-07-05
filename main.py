@@ -71,7 +71,8 @@ async def main():
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
                        max_devices=int(cfg["max_devices"]),
                        sys_history_max=int(cfg["sys_history_max"]),
-                       sys_log_dir=sys_log_dir)
+                       sys_log_dir=sys_log_dir,
+                       sys_csv_interval=float(cfg["sys_csv_interval"]))
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
                                        token=str(cfg["ingest_token"] or ""))
     web_runner = await start_web(hub, int(cfg["web_port"]))

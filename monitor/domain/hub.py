@@ -43,15 +43,19 @@ class DeviceState:
         self.sys_history = deque(maxlen=sys_history_max)  # 近段 sys 樣本（趨勢圖用）
         self.sys_csv = None        # 惰性開啟的 CSV 檔案 handle（None = 未開/停用）
         self.sys_csv_failed = False  # 開檔或寫入失敗過 → 不再嘗試，避免灌爆 log
+        self.sys_csv_last_ts = 0.0  # 上次寫入 CSV 的時間（節流用；0 → 下一筆立刻寫）
 
 
 class TelemetryHub:
     def __init__(self, offline_timeout: float = 5.0, max_devices: int = 16,
-                 sys_history_max: int = 720, sys_log_dir: str = ""):
+                 sys_history_max: int = 720, sys_log_dir: str = "",
+                 sys_csv_interval: float = 60.0):
         self.log = logging.getLogger("hub")
         self.offline_timeout = offline_timeout
         self.max_devices = max_devices
         self.sys_history_max = sys_history_max
+        # CSV 寫入節流間隔（秒）：只放慢長期落地檔，即時畫面/記憶體歷史仍隨 Pi 送出頻率更新
+        self.sys_csv_interval = sys_csv_interval
         # 系統狀態 CSV 落地目錄（空字串 = 停用）。存在則長期趨勢寫入此處，重開伺服器不丟。
         self.sys_log_dir = sys_log_dir
         if sys_log_dir:
@@ -128,9 +132,15 @@ class TelemetryHub:
         return list(st.sys_history) if st else []
 
     def _append_sys_csv(self, st: DeviceState, msg: dict):
-        """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）"""
+        """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）。
+        依 sys_csv_interval 節流：長期 log 不需要跟即時畫面一樣密（預設 5s），
+        用伺服器到達時間判斷（不依賴 Pi 端時鐘準確度）。"""
         if not self.sys_log_dir or st.sys_csv_failed:
             return
+        now = time.time()
+        if now - st.sys_csv_last_ts < self.sys_csv_interval:
+            return
+        st.sys_csv_last_ts = now
         try:
             if st.sys_csv is None:
                 # 檔名用機台編號；濾掉路徑分隔等字元，防呆
