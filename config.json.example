@@ -3,5 +3,7 @@
     "web_port": 8080,
     "offline_timeout": 5.0,
     "ingest_token": "",
-    "max_devices": 16
+    "max_devices": 16,
+    "sys_history_max": 720,
+    "sys_log_dir": "sys_logs"
 }

@@ -23,9 +23,26 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `status` | 呼吸器連線狀態變化 | `state`（connected / connecting / disconnected）、`msg` 顯示文字、`ts` |
 | `device_info` | 取得設備 ID 後 | `info`：`id`/`name`/`revision`/`medibus`、`ts` |
 | `alarm` | 警報狀態變化時（**全量**） | `alarms` 陣列，每項 `{prio, code, text}`；prio 1~31（31 最高，同 MEDIBUS）；**空陣列 = 全部解除**、`ts` |
+| `sys` | Pi 自身系統狀態（每 ~5s） | 見下表，各欄皆可為 `null`（該項當下取不到）、`ts` |
 | `ping` | 閒置 ≥2s 心跳 | `ts` |
 
 註：`alarm` 全鏈已實作——Pi 端隨慢數據輪詢（MEDIBUS 27H/2EH，約每 5 秒）取得警報，內容變化時全量送出；開發 UI 亦可用 `tools/fake_pi.py --alarms` 模擬。
+
+### `sys`（Pi 系統健康狀態）
+
+Pi 端在遙測背景執行緒每 ~5s 取樣一次（純標準庫讀 `/proc`、`/sys`、`vcgencmd`、`shutil`），與呼吸器連線與否無關。每欄取不到時送 `null`（非 Linux/非 Pi 環境多數欄位為 `null`，僅磁碟可得）。
+
+| 欄位 | 意義 | 單位 |
+|---|---|---|
+| `cpu` | CPU 使用率（跨核心彙整，0~100） | % |
+| `mem` | 記憶體使用率 | % |
+| `temp` | CPU 溫度 | °C |
+| `disk_pct` | 資料分割區使用率 | % |
+| `disk_free` | 資料分割區剩餘空間 | GB |
+| `throttled` | Pi 過熱/欠壓旗標（`vcgencmd get_throttled`）；`"0x0"` = 正常，非 0 = 曾降頻或欠壓 | 十六進位字串 |
+| `uptime` | 開機至今時長（可用於偵測重開機） | 秒 |
+
+`sys` 是**有狀態**類型：伺服器保留每台裝置最新一則供 snapshot，並在記憶體保留近段歷史（供儀表板趨勢圖）＋逐筆附加寫入伺服器端 CSV（長期趨勢，供 Excel 事後分析；重開伺服器不丟）。CSV **只含系統指標與機台編號，絕不含病人代碼**。開發可用 `tools/fake_pi.py`（預設即模擬 `sys`）產生資料。
 
 伺服器超過 `offline_timeout`（預設 5 秒）沒收到任何訊息 → 判定該裝置離線。
 
@@ -35,8 +52,14 @@ Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另�
 
 | type | 說明 |
 |---|---|
-| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`）的最新一則 |
+| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`/`sys`）的最新一則 |
 | `link` | Pi 與伺服器的連線狀態：`online` true/false（上線時附 `patient`）。注意這與 `status`（Pi 與呼吸器的串口狀態）是兩件事 |
+
+`sys` 亦原樣轉發（加 `device`）。趨勢圖歷史另走 HTTP（不佔 WebSocket）：
+
+| 端點 | 說明 |
+|---|---|
+| `GET /history/{device}` | 回傳該裝置記憶體中的 `sys` 近段歷史：`{"device":..., "samples":[{...,"ts":...}, ...]}`。瀏覽器展開某台裝置時抓一次補齊趨勢圖，之後由即時 `sys` 續接。未知裝置回傳空 `samples`。 |
 
 ## 版本相容規則
 

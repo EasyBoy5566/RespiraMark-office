@@ -19,6 +19,30 @@ import time
 SAMPLE_RATE = 100        # Hz，與 Pi 端實際波形速率同量級
 FLUSH_INTERVAL = 0.15    # 秒，打包間隔（與 telemetry_client 相同）
 PARAMS_INTERVAL = 5.0    # 秒，慢數據間隔
+SYS_INTERVAL = 5.0       # 秒，系統狀態間隔（與 telemetry_client 相同）
+
+
+class FakeSys:
+    """模擬 Pi 系統狀態隨機漫步（CPU/溫度緩慢變動）；--sys-hot 模擬過熱高載"""
+
+    def __init__(self, hot=False):
+        self.hot = hot
+        self.start = time.time() - 3600     # 假裝已開機 1 小時
+        self.cpu = 60.0 if hot else 15.0
+
+    def sample(self):
+        self.cpu = max(3.0, min(99.0, self.cpu + random.uniform(-6, 6)))
+        temp = (72.0 if self.hot else 50.0) + random.uniform(-3, 7)
+        return {
+            "type": "sys",
+            "cpu": round(self.cpu, 1),
+            "mem": round(random.uniform(36, 48), 1),
+            "temp": round(temp, 1),
+            "disk_pct": round(random.uniform(60, 64), 1),
+            "disk_free": round(random.uniform(11.5, 12.5), 1),
+            "throttled": "0x50005" if self.hot else "0x0",
+            "uptime": round(time.time() - self.start, 0),
+        }
 
 
 class BreathModel:
@@ -90,7 +114,7 @@ def send_lines(sock, msgs):
     sock.sendall(payload.encode("utf-8"))
 
 
-def run_session(args, model):
+def run_session(args, model, sysmodel):
     sock = socket.create_connection((args.host, args.port), timeout=3.0)
     sock.settimeout(2.0)
     # 關閉 Nagle：小批次立即送出，避免黏包造成到達時間抖動
@@ -105,12 +129,14 @@ def run_session(args, model):
         {"type": "device_info", "info": {"id": "5030", "name": "Savina 300 (Fake)",
                                          "revision": "9.99", "medibus": "6.00"}},
         model.params(),
+        sysmodel.sample(),          # 立刻發一則 sys，讓 snapshot 即有系統狀態
     ])
 
     batch = []
     next_sample = time.monotonic()
     next_flush = next_sample + FLUSH_INTERVAL
     next_params = next_sample + PARAMS_INTERVAL
+    next_sys = next_sample + SYS_INTERVAL
     next_alarm = next_sample if args.alarms else None   # 啟用時立刻發第一則
     alarm_on = False
     dt = 1.0 / SAMPLE_RATE
@@ -133,6 +159,9 @@ def run_session(args, model):
         if now >= next_params:
             send_lines(sock, [model.params()])
             next_params = now + PARAMS_INTERVAL
+        if now >= next_sys:
+            send_lines(sock, [sysmodel.sample()])
+            next_sys = now + SYS_INTERVAL
         if next_alarm is not None and now >= next_alarm:
             alarm_on = not alarm_on                # 每 20 秒切換 觸發/解除
             alarms = []
@@ -158,12 +187,15 @@ def main():
                     help="hello 的存取權杖（伺服器 config.json 有設 ingest_token 時必填）")
     ap.add_argument("--alarms", action="store_true",
                     help="模擬警報：啟動即觸發，之後每 20 秒切換觸發/解除（開發警報 UI 用）")
+    ap.add_argument("--sys-hot", action="store_true",
+                    help="模擬 Pi 過熱高載：溫度/CPU 偏高且降頻旗標非 0（測系統狀態示警配色用）")
     args = ap.parse_args()
 
     model = BreathModel(rr=args.rr)
+    sysmodel = FakeSys(hot=args.sys_hot)
     while True:
         try:
-            run_session(args, model)
+            run_session(args, model, sysmodel)
         except KeyboardInterrupt:
             print(f"\n[{args.device}] 結束")
             return

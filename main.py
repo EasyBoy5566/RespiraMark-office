@@ -14,9 +14,10 @@ RespiraMark Office — 中央監視儀表板 進入點
 import argparse
 import asyncio
 import logging
+import os
 import socket
 
-from monitor.config import DEFAULT_CONFIG_PATH, load_config
+from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.hub import TelemetryHub
 from monitor.transport.ingest import start_ingest
 from monitor.web.routes import start_web
@@ -61,9 +62,16 @@ async def main():
     )
     cfg = load_config(args.config)
 
+    # 系統狀態 CSV 目錄：相對路徑一律以專案根目錄為基準（不受啟動 cwd 影響）
+    sys_log_dir = str(cfg.get("sys_log_dir") or "")
+    if sys_log_dir and not os.path.isabs(sys_log_dir):
+        sys_log_dir = os.path.join(PROJECT_ROOT, sys_log_dir)
+
     # 組裝三層
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
-                       max_devices=int(cfg["max_devices"]))
+                       max_devices=int(cfg["max_devices"]),
+                       sys_history_max=int(cfg["sys_history_max"]),
+                       sys_log_dir=sys_log_dir)
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
                                        token=str(cfg["ingest_token"] or ""))
     web_runner = await start_web(hub, int(cfg["web_port"]))

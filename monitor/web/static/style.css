@@ -22,6 +22,7 @@
   --trig:       rgba(255, 234, 0, 0.55);    /* Trigger 標記（#FFEA00 半透明） */
   --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 警報列底色 */
   --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
+  --sys-line:   #56A6FF;                     /* 系統狀態趨勢折線 */
 }
 
 /* 淺色主題：波形改用深一階的同色系，否則螢光色在白底上看不清 */
@@ -45,6 +46,7 @@
   --trig:       rgba(191, 144, 0, 0.6);
   --alarm-bg:   rgba(213, 0, 0, 0.08);
   --overlay-bg: rgba(237, 241, 247, 0.96);
+  --sys-line:   #0277BD;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -244,3 +246,49 @@ main#grid {
 .kv-table .row .k { color: var(--text-secondary); }
 .kv-table .row .v { font-weight: bold; font-variant-numeric: tabular-nums; }
 .dev-info-line { font-size: 13px; color: var(--text-disabled); padding: 6px 0; }
+
+/* ── Pi 系統狀態：卡片常駐小字列（正常灰、warn 黃、crit 紅）────── */
+.sys-strip {
+  display: flex; flex-wrap: wrap; gap: 4px 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+}
+.sys-strip:empty { display: none; }        /* 尚無 sys 資料時不佔位 */
+.sys-chip {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.sys-chip.warn { color: var(--amber); border-color: var(--amber); }
+.sys-chip.crit { color: var(--red); border-color: var(--red); font-weight: bold; }
+
+/* ── Pi 系統狀態趨勢（放大檢視，跨整列）─────────────────────── */
+.sys-trend { grid-column: 1 / -1; }
+.sys-info-line {
+  font-size: 13px; color: var(--text-secondary);
+  padding: 2px 0 8px; font-variant-numeric: tabular-nums;
+}
+.sys-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.sys-chart {
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 4px 6px 6px;
+}
+.sys-chart-head { display: flex; justify-content: space-between; align-items: baseline; }
+.sys-chart-label { font-size: 12px; color: var(--text-label); }
+.sys-chart-val {
+  font-size: 15px; font-weight: bold;
+  font-variant-numeric: tabular-nums; color: var(--text-primary);
+}
+.sys-chart-val.warn { color: var(--amber); }
+.sys-chart-val.crit { color: var(--red); }
+.sys-chart canvas { display: block; width: 100%; height: 64px; }

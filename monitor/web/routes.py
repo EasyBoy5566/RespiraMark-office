@@ -20,6 +20,13 @@ async def index(request):
     return web.FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
+async def sys_history(request):
+    """GET /history/{device} → 該裝置 sys 近段歷史（趨勢圖展開時抓一次補齊）"""
+    hub = request.app["hub"]
+    device = request.match_info["device"]
+    return web.json_response({"device": device, "samples": hub.sys_history(device)})
+
+
 async def ws_handler(request):
     hub = request.app["hub"]
     ws = web.WebSocketResponse(heartbeat=20)
@@ -53,6 +60,7 @@ def create_app(hub) -> web.Application:
     app["hub"] = hub
     app.router.add_get("/", index)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/history/{device}", sys_history)
     app.router.add_static("/static/", STATIC_DIR)
     return app
 

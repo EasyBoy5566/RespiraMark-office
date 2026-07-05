@@ -25,6 +25,7 @@ PY = sys.executable
 WEB_PORT = 18080
 INGEST_PORT = 18765
 TOKEN = "SMOKETOKEN"     # 測試用 ingest_token，驗證 token 驗證路徑
+SYS_LOG_DIR = os.path.join(tempfile.gettempdir(), "respiramark_smoke_syslogs")
 
 sys.path.insert(0, BASE_DIR)
 try:
@@ -77,6 +78,18 @@ async def collect_ws(seconds=4.0):
     return msgs
 
 
+async def fetch_history(device):
+    """GET /history/{device} → samples 清單（失敗回傳 None）"""
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.get(f"http://localhost:{WEB_PORT}/history/{device}") as r:
+                if r.status != 200:
+                    return None
+                return (await r.json()).get("samples")
+        except aiohttp.ClientError:
+            return None
+
+
 async def check_bad_token():
     """帶錯誤 token 的 hello 應被伺服器立即斷線（回傳 True = 有被斷線）"""
     try:
@@ -121,6 +134,9 @@ async def run_checks():
         d1 = devs.get("smoke-01", {})
         check("snapshot 含病人代碼", d1.get("patient") == "SMOKE001")
         check("snapshot 含 params 快照", "params" in d1)
+        sysm = d1.get("sys") or {}
+        check("snapshot 含 sys 快照（系統狀態）",
+              sysm.get("type") == "sys" and "cpu" in sysm, str(sysm)[:80])
         d2 = devs.get("smoke-02", {})
         alarms = (d2.get("alarm") or {}).get("alarms") or []
         check("snapshot 含 alarm 快照（--alarms 裝置）",
@@ -138,13 +154,33 @@ async def run_checks():
         check("波形速率合理（80~120Hz）", 80 <= total / 4.0 <= 120,
               f"{total / 4.0:.0f} 樣本/秒")
 
+    # 系統狀態（sys）全鏈：即時廣播 → HTTP 歷史端點 → CSV 落地
+    sysmsgs = [m for m in msgs if m["type"] == "sys"]
+    check("sys 有廣播到瀏覽器", any("cpu" in m for m in sysmsgs),
+          f"共 {len(sysmsgs)} 則")
+    hist = await fetch_history("smoke-01")
+    check("history 端點回傳 sys 樣本",
+          isinstance(hist, list) and len(hist) >= 1 and "cpu" in (hist[0] if hist else {}),
+          f"{len(hist) if hist else 0} 筆")
+    check("未知裝置 history 回傳空清單", (await fetch_history("nope")) == [])
+    csv_path = os.path.join(SYS_LOG_DIR, "sys_smoke-01.csv")
+    ok_csv = os.path.exists(csv_path) and sum(1 for _ in open(csv_path, encoding="utf-8")) >= 2
+    check("sys 已落地 CSV（含表頭+資料）", ok_csv, csv_path)
+
 
 def main():
     # 測試專用設定檔（放系統暫存目錄，不碰專案的 config.json）
+    # sys_log_dir 導向暫存目錄：驗證 CSV 落地，且不在 repo 產生 sys_logs/
+    for old in ("sys_smoke-01.csv", "sys_smoke-02.csv"):
+        try:
+            os.remove(os.path.join(SYS_LOG_DIR, old))
+        except OSError:
+            pass
     cfg_path = os.path.join(tempfile.gettempdir(), "respiramark_smoke_config.json")
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump({"ingest_port": INGEST_PORT, "web_port": WEB_PORT,
-                   "offline_timeout": 5.0, "ingest_token": TOKEN}, f)
+                   "offline_timeout": 5.0, "ingest_token": TOKEN,
+                   "sys_log_dir": SYS_LOG_DIR}, f)
 
     log_path = os.path.join(tempfile.gettempdir(), "respiramark_smoke_server.log")
     log_file = open(log_path, "w", encoding="utf-8")
