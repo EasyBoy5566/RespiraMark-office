@@ -6,5 +6,10 @@
     "max_devices": 16,
     "sys_history_max": 720,
     "sys_log_dir": "sys_logs",
-    "sys_csv_interval": 60.0
+    "sys_csv_interval": 60.0,
+    "tls_cert": "certs/server.pem",
+    "tls_key": "certs/server.key",
+    "auth_enabled": true,
+    "accounts_file": "accounts.json",
+    "session_idle_minutes": 30.0
 }

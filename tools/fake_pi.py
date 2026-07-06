@@ -14,6 +14,7 @@ import json
 import math
 import random
 import socket
+import ssl
 import time
 
 SAMPLE_RATE = 100        # Hz，與 Pi 端實際波形速率同量級
@@ -116,6 +117,10 @@ def send_lines(sock, msgs):
 
 def run_session(args, model, sysmodel):
     sock = socket.create_connection((args.host, args.port), timeout=3.0)
+    if args.tls_ca:
+        # 與 Pi 端 telemetry_client 相同的 CA 釘選 TLS（測試伺服器加密路徑用）
+        ctx = ssl.create_default_context(cafile=args.tls_ca)
+        sock = ctx.wrap_socket(sock, server_hostname=args.host)
     sock.settimeout(2.0)
     # 關閉 Nagle：小批次立即送出，避免黏包造成到達時間抖動
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -189,6 +194,8 @@ def main():
                     help="模擬警報：啟動即觸發，之後每 20 秒切換觸發/解除（開發警報 UI 用）")
     ap.add_argument("--sys-hot", action="store_true",
                     help="模擬 Pi 過熱高載：溫度/CPU 偏高且降頻旗標非 0（測系統狀態示警配色用）")
+    ap.add_argument("--tls-ca", default="",
+                    help="TLS 連線：伺服器自建 CA 憑證（ca.pem）路徑；省略 = 明文")
     args = ap.parse_args()
 
     model = BreathModel(rr=args.rr)

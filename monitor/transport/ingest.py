@@ -64,9 +64,10 @@ async def handle_ingest(reader, writer, hub, token=""):
             pass
 
 
-async def start_ingest(hub, port: int, token: str = ""):
-    """啟動 TCP 接收伺服器；token 非空時對所有連線做 hello 驗證"""
+async def start_ingest(hub, port: int, token: str = "", ssl_ctx=None):
+    """啟動 TCP 接收伺服器；token 非空時對所有連線做 hello 驗證；
+    ssl_ctx 非 None 時整條連線走 TLS（Pi 端需以 tls_ca 信任本伺服器的 CA）"""
     return await asyncio.start_server(
         lambda r, w: handle_ingest(r, w, hub, token),
-        "0.0.0.0", port, limit=READ_LIMIT,
+        "0.0.0.0", port, limit=READ_LIMIT, ssl=ssl_ctx,
     )

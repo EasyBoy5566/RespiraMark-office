@@ -1,0 +1,10 @@
+{
+  "_說明": "帳號檔範本。實際的 accounts.json 不進 git，請用 tools/make_user.py 建立（密碼只存 PBKDF2 雜湊，不存明碼）。role: viewer=只看儀表板, admin=含管理功能",
+  "users": [
+    {
+      "username": "admin",
+      "role": "admin",
+      "password": "pbkdf2_sha256$200000$<salt-hex>$<hash-hex>（由 make_user.py 產生，勿手填）"
+    }
+  ]
+}

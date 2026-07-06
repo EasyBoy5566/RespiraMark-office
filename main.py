@@ -1,11 +1,12 @@
 """
 RespiraMark Office — 中央監視儀表板 進入點
 ============================================
-- TCP :8765  接收各 Pi 的遙測資料（JSON Lines，見 PROTOCOL.md）
-- HTTP :8080 提供儀表板網頁 + WebSocket /ws 即時廣播
+- TCP :8765  接收各 Pi 的遙測資料（JSON Lines，見 PROTOCOL.md；可 TLS）
+- HTTP(S) :8080 提供儀表板網頁 + WebSocket /ws 即時廣播（可 TLS + 登入）
 
 啟動：python main.py（或雙擊 start_server.bat）
 設定：config.json（不存在則用預設值，範本見 config.json.example）
+憑證：python tools/make_certs.py；帳號：python tools/make_user.py
 
 本檔是 composition root——唯一同時 import 三層並組裝的地方：
     transport(ingest) ──▶ domain(hub) ◀── web(routes)
@@ -16,11 +17,54 @@ import asyncio
 import logging
 import os
 import socket
+import ssl
+import sys
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.hub import TelemetryHub
 from monitor.transport.ingest import start_ingest
+from monitor.web.auth import AuthManager
 from monitor.web.routes import start_web
+
+
+def _resolve(path: str) -> str:
+    """相對路徑一律以專案根目錄為基準（不受啟動 cwd 影響）"""
+    if path and not os.path.isabs(path):
+        return os.path.join(PROJECT_ROOT, path)
+    return path
+
+
+def build_ssl_context(cfg: dict):
+    """依設定建立伺服器 TLS context；未設定回傳 None（明文，僅限開發）。
+    設了卻讀不到檔案 → 直接結束：寧可不啟動，也不要靜默退回明文。"""
+    cert = _resolve(str(cfg.get("tls_cert") or ""))
+    key = _resolve(str(cfg.get("tls_key") or ""))
+    if not cert and not key:
+        return None
+    if not (cert and key) or not os.path.exists(cert) or not os.path.exists(key):
+        print("錯誤：config.json 已設定 tls_cert/tls_key，但憑證檔不存在。")
+        print("  請先執行 python tools/make_certs.py 產生憑證，")
+        print("  或把 tls_cert/tls_key 清成空字串以停用加密（僅限開發環境）。")
+        sys.exit(1)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, key)
+    return ctx
+
+
+def build_auth_manager(cfg: dict, tls_on: bool):
+    """依設定建立登入管理器；auth_enabled=false 回傳 None（僅限開發）"""
+    log = logging.getLogger("main")
+    if not cfg.get("auth_enabled"):
+        log.warning("登入驗證未啟用（auth_enabled=false）——僅限開發環境使用")
+        return None
+    mgr = AuthManager(_resolve(str(cfg.get("accounts_file") or "accounts.json")),
+                      idle_minutes=float(cfg.get("session_idle_minutes") or 0),
+                      secure_cookie=tls_on)
+    if not mgr.has_users():
+        log.warning("accounts.json 尚無任何帳號，目前無人能登入——"
+                    "請先執行 python tools/make_user.py --user <帳號> --role admin")
+    return mgr
 
 
 def lan_ip() -> str:
@@ -35,15 +79,20 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
-def print_banner(cfg: dict):
+def print_banner(cfg: dict, tls_on: bool, auth_on: bool):
     ip = lan_ip()
+    scheme = "https" if tls_on else "http"
     print()
     print("=" * 62)
     print("  RespiraMark Office 彙整伺服器已啟動")
-    print(f"  儀表板（本機）:   http://localhost:{cfg['web_port']}")
-    print(f"  儀表板（區網）:   http://{ip}:{cfg['web_port']}")
+    print(f"  儀表板（本機）:   {scheme}://localhost:{cfg['web_port']}")
+    print(f"  儀表板（區網）:   {scheme}://{ip}:{cfg['web_port']}")
     print(f"  Pi 端 telemetry.json 的 server_host 請填: {ip}")
-    print(f"  Pi 資料接收 port: {cfg['ingest_port']}")
+    # 注意：只用 cp950 可編碼的字元（Windows 輸出重導向到檔案時非 UTF-8）
+    print(f"  Pi 資料接收 port: {cfg['ingest_port']}"
+          + ("（TLS 加密，Pi 端需設 tls: true）" if tls_on else ""))
+    print(f"  傳輸加密: {'已啟用' if tls_on else '未啟用（僅限開發環境）'}"
+          f"    登入驗證: {'已啟用' if auth_on else '未啟用（僅限開發環境）'}")
     print("  （若其他裝置連不上，請確認 Windows 防火牆已放行以上兩個 port）")
     print("=" * 62)
     print()
@@ -62,10 +111,11 @@ async def main():
     )
     cfg = load_config(args.config)
 
-    # 系統狀態 CSV 目錄：相對路徑一律以專案根目錄為基準（不受啟動 cwd 影響）
-    sys_log_dir = str(cfg.get("sys_log_dir") or "")
-    if sys_log_dir and not os.path.isabs(sys_log_dir):
-        sys_log_dir = os.path.join(PROJECT_ROOT, sys_log_dir)
+    sys_log_dir = _resolve(str(cfg.get("sys_log_dir") or ""))
+
+    # 安全設定（TLS 與登入）
+    ssl_ctx = build_ssl_context(cfg)
+    authmgr = build_auth_manager(cfg, tls_on=ssl_ctx is not None)
 
     # 組裝三層
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
@@ -74,11 +124,13 @@ async def main():
                        sys_log_dir=sys_log_dir,
                        sys_csv_interval=float(cfg["sys_csv_interval"]))
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
-                                       token=str(cfg["ingest_token"] or ""))
-    web_runner = await start_web(hub, int(cfg["web_port"]))
+                                       token=str(cfg["ingest_token"] or ""),
+                                       ssl_ctx=ssl_ctx)
+    web_runner = await start_web(hub, int(cfg["web_port"]),
+                                 ssl_ctx=ssl_ctx, authmgr=authmgr)
     watchdog = asyncio.ensure_future(hub.watchdog())
 
-    print_banner(cfg)
+    print_banner(cfg, tls_on=ssl_ctx is not None, auth_on=authmgr is not None)
     try:
         await asyncio.Event().wait()           # 永久運行，Ctrl+C 結束
     finally:

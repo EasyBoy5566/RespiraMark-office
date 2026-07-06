@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登入 — RespiraMark 中央監視</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-card" method="post" action="/login">
+      <h1>RespiraMark 中央監視</h1>
+      <div class="login-sub">請登入以檢視監測畫面</div>
+      <label for="u">帳號</label>
+      <input id="u" name="username" autocomplete="username" autofocus required>
+      <label for="p">密碼</label>
+      <input id="p" name="password" type="password" autocomplete="current-password" required>
+      <button class="login-btn" type="submit">登入</button>
+      <div id="loginErr" class="login-err hidden"></div>
+    </form>
+  </div>
+  <script src="/static/login.js"></script>
+</body>
+</html>

@@ -23,6 +23,13 @@ DEFAULTS = {
     "sys_log_dir": "sys_logs",
     # 秒，CSV 寫入節流間隔：只影響長期落地檔，不影響即時畫面/記憶體歷史（仍隨 Pi 送出頻率更新）
     "sys_csv_interval": 60.0,
+    # ── TLS 加密（tools/make_certs.py 產生憑證；兩者皆填才啟用，網頁與 ingest 同時加密）──
+    "tls_cert": "",           # 伺服器憑證，例如 "certs/server.pem"（相對專案根目錄）
+    "tls_key": "",            # 伺服器私鑰，例如 "certs/server.key"
+    # ── 瀏覽器登入（tools/make_user.py 建帳號；停用僅限開發環境）──
+    "auth_enabled": True,
+    "accounts_file": "accounts.json",
+    "session_idle_minutes": 30.0,   # 閒置逾時自動登出；0 = 不逾時（護理站看板用）
 }
 
 

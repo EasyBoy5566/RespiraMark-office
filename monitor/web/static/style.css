@@ -23,6 +23,9 @@
   --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 警報列底色 */
   --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
   --sys-line:   #56A6FF;                     /* 系統狀態趨勢折線 */
+  --blue:       #2F80ED;                     /* Primary Medical Blue（官方色盤） */
+  --blue-hover: #3C8DFF;
+  --focus:      #56A6FF;
 }
 
 /* 淺色主題：波形改用深一階的同色系，否則螢光色在白底上看不清 */
@@ -47,6 +50,9 @@
   --alarm-bg:   rgba(213, 0, 0, 0.08);
   --overlay-bg: rgba(237, 241, 247, 0.96);
   --sys-line:   #0277BD;
+  --blue:       #1C6ED5;                     /* 淺色底用 Active Blue，對比較足 */
+  --blue-hover: #2F80ED;
+  --focus:      #2F80ED;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -79,6 +85,7 @@ header {
   border-radius: 6px;
   padding: 3px 12px;
   cursor: pointer;
+  text-decoration: none;    /* 連結型按鈕（設備管理入口、返回儀表板）與按鈕外觀一致 */
 }
 .theme-btn:hover { background: var(--hover); color: var(--text-primary); }
 
@@ -123,10 +130,6 @@ main#grid {
 .dev-name { font-weight: bold; font-size: 15px; }
 .patient  { color: var(--text-secondary); font-size: 13px; }
 .spacer { flex: 1; }
-
-/* CPU/記憶體/溫度：頭排常駐小字（沿用 .sys-chip 樣式，見下方）*/
-.sys-mini { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.sys-mini:empty { display: none; }
 
 /* 狀態小方塊：標籤（灰）+ 狀態文字（依連線狀態上色），避免兩種狀態並排時看不出各自代表什麼 */
 .status-group {
@@ -251,28 +254,7 @@ main#grid {
 .kv-table .row .v { font-weight: bold; font-variant-numeric: tabular-nums; }
 .dev-info-line { font-size: 13px; color: var(--text-disabled); padding: 6px 0; }
 
-/* ── Pi 系統狀態：卡片常駐小字列（正常灰、warn 黃、crit 紅）────── */
-.sys-strip {
-  display: flex; flex-wrap: wrap; gap: 4px 8px;
-  padding: 4px 10px;
-  border-bottom: 1px solid var(--divider);
-  font-size: 12px;
-}
-.sys-strip:empty { display: none; }        /* 尚無 sys 資料時不佔位 */
-.sys-chip {
-  color: var(--text-secondary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--divider);
-  border-radius: 4px;
-  padding: 1px 7px;
-  font-size: 12px;                  /* 寫死，不依賴外層容器字級（曾在頭排失去繼承來源而變大）*/
-  font-variant-numeric: tabular-nums;
-}
-.sys-chip.warn { color: var(--amber); border-color: var(--amber); }
-.sys-chip.crit { color: var(--red); border-color: var(--red); font-weight: bold; }
-
-/* ── Pi 系統狀態趨勢（放大檢視，跨整列）─────────────────────── */
-.sys-trend { grid-column: 1 / -1; }
+/* ── Pi 系統狀態趨勢（管理頁 /admin 使用，繪圖在 sys.js）────── */
 .sys-info-line {
   font-size: 13px; color: var(--text-secondary);
   padding: 2px 0 8px; font-variant-numeric: tabular-nums;
@@ -297,3 +279,153 @@ main#grid {
 .sys-chart-val.warn { color: var(--amber); }
 .sys-chart-val.crit { color: var(--red); }
 .sys-chart canvas { display: block; width: 100%; height: 64px; }
+
+/* ── 登入頁 ──────────────────────────────────────────────── */
+.login-wrap {
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-primary);
+  padding: 20px;
+}
+.login-card {
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  padding: 34px 38px;
+  width: 340px; max-width: 100%;
+}
+.login-card h1 { font-size: 20px; margin-bottom: 4px; }
+.login-sub { color: var(--text-label); font-size: 13px; margin-bottom: 22px; }
+.login-card label {
+  display: block; font-size: 13px;
+  color: var(--text-secondary); margin: 12px 0 4px;
+}
+.login-card input {
+  width: 100%; padding: 9px 10px; font-size: 15px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+.login-card input:focus { outline: none; border-color: var(--focus); }
+.login-btn {
+  margin-top: 20px; width: 100%; padding: 10px;
+  font-size: 15px; font-weight: bold; color: #FFFFFF;
+  background: var(--blue);
+  border: none; border-radius: 6px; cursor: pointer;
+}
+.login-btn:hover { background: var(--blue-hover); }
+.login-err { margin-top: 14px; color: var(--red); font-size: 13px; }
+
+/* Header 登入者顯示 */
+.who { color: var(--text-secondary); font-size: 14px; }
+
+/* ── 管理頁（/admin）────────────────────────────────────── */
+.admin-main {
+  max-width: 1200px; margin: 0 auto;
+  padding: 16px 18px 40px;
+  display: grid; gap: 26px;
+}
+.admin-main h2 {
+  font-size: 17px;
+  border-bottom: 1px solid var(--divider);
+  padding-bottom: 6px; margin-bottom: 10px;
+}
+.admin-empty { color: var(--text-disabled); font-size: 15px; padding: 14px 0; }
+.admin-hint { color: var(--text-label); font-size: 13px; margin-top: 8px; line-height: 1.6; }
+
+/* 設備健康總表：卡片格線，視覺語言比照主儀表板的 .card（同背景/邊框/圓角）── */
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.admin-card {
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.admin-card-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--divider);
+}
+.admin-card-head .dev-name { font-weight: bold; font-size: 15px; }
+.admin-card-head .spacer { flex: 1; }
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  padding: 10px 12px;
+}
+.metric-chip {
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 6px 8px;
+  text-align: center;
+}
+.metric-label { font-size: 11px; color: var(--text-label); }
+.metric-val {
+  font-size: 18px; font-weight: bold;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.metric-val.warn { color: var(--amber); }
+.metric-val.crit { color: var(--red); }
+
+.admin-card-info {
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  padding: 0 12px 10px;
+  font-size: 12px; color: var(--text-secondary);
+}
+.info-chip.crit { color: var(--red); font-weight: bold; }
+
+.admin-card-foot {
+  display: flex; gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--divider);
+}
+
+.admin-trend {
+  padding: 4px 12px 12px;
+  border-top: 1px dashed var(--divider);
+}
+
+.admin-btn {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  padding: 3px 11px;
+  cursor: pointer;
+}
+.admin-btn:hover { background: var(--hover); color: var(--text-primary); }
+.admin-btn.danger { color: var(--red); border-color: var(--red); }
+.admin-btn.danger:hover { background: var(--alarm-bg); }
+.admin-btn:disabled {
+  color: var(--text-disabled); border-color: var(--divider);
+  background: var(--bg-secondary); cursor: not-allowed;
+}
+
+/* 帳號清單：卡片包住表格，與上方風格一致 */
+.acc-card {
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.acc-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.acc-table th {
+  font-size: 12px; font-weight: bold; text-align: left;
+  color: var(--text-label);
+  background: var(--bg-secondary);
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.acc-table td { padding: 7px 12px; border-bottom: 1px solid var(--divider); }
+.acc-table tr:last-child td { border-bottom: none; }

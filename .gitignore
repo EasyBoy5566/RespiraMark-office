@@ -7,6 +7,10 @@ venv/
 # 本機設定（每台機器各自維護，範本見 config.json.example）
 config.json
 
+# 登入帳號與 TLS 憑證（含私鑰與密碼雜湊，絕不進 git；工具見 tools/）
+accounts.json
+certs/
+
 # Pi 系統狀態長期落地 CSV（每台伺服器各自累積，不進 git）
 sys_logs/
 

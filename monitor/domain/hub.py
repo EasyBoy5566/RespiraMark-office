@@ -29,6 +29,11 @@ STREAM_TYPES = ("wave",)
 SYS_CSV_FIELDS = ("cpu", "mem", "temp", "disk_pct", "disk_free", "throttled", "uptime")
 
 
+def _safe_name(device: str) -> str:
+    """機台編號 → 可安全放進檔名的字串（濾掉路徑分隔等字元，防呆）"""
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in device) or "device"
+
+
 class DeviceState:
     """單一 Pi 裝置的最新狀態（供 snapshot 用）"""
 
@@ -131,6 +136,32 @@ class TelemetryHub:
         st = self.devices.get(device)
         return list(st.sys_history) if st else []
 
+    def remove_device(self, device: str) -> str:
+        """管理頁移除離線裝置（PROTOCOL.md /api/admin/devices）。
+        回傳 "ok"｜"online"（線上不可移除）｜"unknown"。
+        只清伺服器記憶體狀態並廣播 device_removed；CSV 落地檔保留（歷史紀錄）。
+        裝置之後重新連上會走 device_hello 自動回來。"""
+        st = self.devices.get(device)
+        if st is None:
+            return "unknown"
+        if st.online:
+            return "online"
+        if st.sys_csv is not None:
+            try:
+                st.sys_csv.close()
+            except OSError:
+                pass
+        del self.devices[device]
+        self.log.info(f"管理員移除離線裝置: {device}")
+        self.broadcast({"type": "device_removed", "device": device})
+        return "ok"
+
+    def sys_csv_path(self, device: str):
+        """該裝置長期 sys CSV 的檔案路徑（供下載端點）；未啟用落地回傳 None"""
+        if not self.sys_log_dir:
+            return None
+        return os.path.join(self.sys_log_dir, f"sys_{_safe_name(device)}.csv")
+
     def _append_sys_csv(self, st: DeviceState, msg: dict):
         """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）。
         依 sys_csv_interval 節流：長期 log 不需要跟即時畫面一樣密（預設 5s），
@@ -143,10 +174,7 @@ class TelemetryHub:
         st.sys_csv_last_ts = now
         try:
             if st.sys_csv is None:
-                # 檔名用機台編號；濾掉路徑分隔等字元，防呆
-                safe = "".join(c if c.isalnum() or c in "-_." else "_"
-                               for c in st.device) or "device"
-                path = os.path.join(self.sys_log_dir, f"sys_{safe}.csv")
+                path = self.sys_csv_path(st.device)
                 is_new = not os.path.exists(path)
                 st.sys_csv = open(path, "a", newline="", encoding="utf-8")
                 if is_new:

@@ -1,10 +1,11 @@
-/* RespiraMark Office 儀表板（前端唯一邏輯檔，分工規範見 CLAUDE.md §5）
+/* RespiraMark Office 儀表板（護理站看板；前端分工見 CLAUDE.md §5）
  * - WebSocket 接收各 Pi 的波形/參數/警報，自動重連
  * - 播放引擎：取樣率由「發送端時間戳」估計（不受網路抖動影響）；
  *   緩衝偏離目標時以 ±15% 微調播放速率，永不暫停 → 波形連續
  * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）
  * - 小卡片：三條波形 + 模式 + 設定值 + 警報列；點開顯示所有量測值
  * - 深/淺色主題：顏色一律讀 style.css 的 CSS 變數，切換時從歷史重播波形
+ * - 登入顯示在 auth.js；Pi 機器健康狀態只在管理頁（/admin）顯示，本頁忽略 sys
  */
 "use strict";
 
@@ -14,17 +15,6 @@ const CHANNELS = [
   { key: "f", label: "Flow L/min", colorVar: "--c-flow",     color: "", min: -50, max: 50,   zero: 0 },
   { key: "v", label: "Vol mL",     colorVar: "--c-volume",   color: "", min: 0,   max: 1000, zero: 0 },
 ];
-// Pi 系統狀態指標（趨勢圖與卡片小字列共用）。warn/crit = 變黃/變紅門檻。
-// 溫度門檻依 Pi 5：~80°C 起降頻；使用率/磁碟接近滿載才示警。
-const SYS_METRICS = [
-  { key: "cpu",      label: "CPU",  unit: "%",  min: 0, max: 100, warn: 85, crit: 95 },
-  { key: "mem",      label: "記憶體", unit: "%", min: 0, max: 100, warn: 85, crit: 95 },
-  { key: "temp",     label: "溫度",  unit: "°C", min: 0, max: 90,  warn: 60, crit: 80 },
-  { key: "disk_pct", label: "磁碟",  unit: "%",  min: 0, max: 100, warn: 85, crit: 95 },
-];
-// 這幾項移到卡片頭排（裝置名稱/連線狀態那一列）；sys-strip 只留降頻旗標（正常時不顯示）
-const HEAD_SYS_KEYS = new Set(["cpu", "mem", "temp", "disk_pct"]);
-const SYS_HIST_MAX = 1000;  // 前端每台裝置保留的 sys 樣本上限（趨勢圖用）
 
 const WINDOW_SEC = 20;      // 波形視窗寬度（秒）
 const GAP_SEC    = 0.5;     // 擦除條寬度（秒）
@@ -60,11 +50,6 @@ function applyTheme(theme) {
   themeBtn.textContent = theme === "light" ? "🌙 深色" : "☀ 淺色";
   refreshThemeColors();
   devices.forEach(setupCanvases);   // 用新顏色從歷史重播波形
-  devices.forEach(redrawSysIfBig);  // 趨勢圖顏色也隨主題重畫
-}
-
-function redrawSysIfBig(dev) {
-  if (dev.big) { setupSysCharts(dev); drawSysCharts(dev); }
 }
 
 themeBtn.addEventListener("click", () =>
@@ -89,9 +74,6 @@ function ensureDev(id) {
     valThrottle: 0,
     big: false,
     card: null,
-    sysHist: [],          // Pi 系統狀態樣本 {ts,cpu,mem,temp,disk_pct,...}
-    sysChans: [],         // 趨勢圖 {canvas,ctx,w,h} × SYS_METRICS
-    sysFetched: false,    // 展開時是否已抓過歷史（避免重複抓）
   };
   buildCard(dev);
   devices.set(id, dev);
@@ -109,7 +91,6 @@ function buildCard(dev) {
       <span class="dev-name"></span>
       <span class="patient"></span>
       <span class="spacer"></span>
-      <span class="sys-mini" title="這台 Pi 的系統狀態（CPU／記憶體／溫度／磁碟）"></span>
       <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
         <span class="status-tag">呼吸器</span>
         <span class="vent-status">—</span>
@@ -121,7 +102,6 @@ function buildCard(dev) {
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
     <div class="alarm-bar hidden"></div>
-    <div class="sys-strip" title="降頻／欠壓旗標（正常時不顯示）"></div>
     <div class="waves"></div>
     <div class="strip-cap">設定值</div>
     <div class="param-strip"></div>
@@ -131,11 +111,6 @@ function buildCard(dev) {
         <h3>設定值</h3><div class="kv-table settings"></div>
         <h3>模式</h3><div class="mode-line" style="font-size:14px"></div>
         <div class="dev-info-line"></div>
-      </div>
-      <div class="sys-trend">
-        <h3>Pi 系統狀態趨勢（近段）</h3>
-        <div class="sys-info-line"></div>
-        <div class="sys-charts"></div>
       </div>
     </div>`;
   card.querySelector(".dev-name").textContent = dev.id;
@@ -151,21 +126,6 @@ function buildCard(dev) {
     dev.chans.push({ canvas: row.querySelector("canvas"),
                      valEl: row.querySelector(".wave-val"),
                      ctx: null, w: 0, h: 0, prevY: null, hist: [] });
-  }
-
-  // 系統狀態趨勢小圖（放大檢視才會被畫；每個指標一格）
-  const sysCharts = card.querySelector(".sys-charts");
-  for (const metric of SYS_METRICS) {
-    const cell = document.createElement("div");
-    cell.className = "sys-chart";
-    cell.innerHTML = `<div class="sys-chart-head">
-        <span class="sys-chart-label">${metric.label}</span>
-        <span class="sys-chart-val ${metric.key}">--</span>
-      </div><canvas></canvas>`;
-    sysCharts.appendChild(cell);
-    dev.sysChans.push({ canvas: cell.querySelector("canvas"),
-                        valEl: cell.querySelector(".sys-chart-val"),
-                        ctx: null, w: 0, h: 0 });
   }
 
   card.addEventListener("click", () => { if (!dev.big) expand(dev); });
@@ -193,26 +153,6 @@ function expand(dev) {
   overlay.appendChild(dev.card);
   overlay.classList.remove("hidden");
   setupCanvases(dev);
-  fetchSysHistory(dev).then(() => { setupSysCharts(dev); drawSysCharts(dev); });
-}
-
-/** 展開時抓一次伺服器記憶體歷史補齊趨勢圖；之後由即時 sys 續接 */
-function fetchSysHistory(dev) {
-  return fetch(`/history/${encodeURIComponent(dev.id)}`)
-    .then((r) => (r.ok ? r.json() : null))
-    .then((data) => {
-      const fetched = (data && data.samples) || [];
-      if (fetched.length) {
-        // 併入抓取期間到達的更新樣本（依 ts 去重），避免漏掉最新幾筆
-        const lastTs = fetched[fetched.length - 1].ts || 0;
-        const newer = dev.sysHist.filter((s) => (s.ts || 0) > lastTs);
-        dev.sysHist = fetched.concat(newer);
-        if (dev.sysHist.length > SYS_HIST_MAX)
-          dev.sysHist.splice(0, dev.sysHist.length - SYS_HIST_MAX);
-      }
-      dev.sysFetched = true;
-    })
-    .catch(() => { dev.sysFetched = true; });   // 抓不到就用即時累積的資料
 }
 
 function collapse(dev) {
@@ -344,111 +284,6 @@ function drawSamples(dev, samples) {
     pctx.closePath();
     pctx.fill();
   }
-}
-
-// ── Pi 系統狀態：門檻分級、卡片小字列、趨勢圖 ────────────────────
-/** 回傳 ""｜"warn"｜"crit"（null/無資料 → ""） */
-function sysLevel(metric, value) {
-  if (value === null || value === undefined || value === "") return "";
-  if (value >= metric.crit) return "crit";
-  if (value >= metric.warn) return "warn";
-  return "";
-}
-
-/** 卡片頭排（CPU/記憶體/溫度）+ 頭排下方 sys-strip（磁碟 + 降頻旗標）；異常變黃/紅 */
-function renderSysStrip(dev, m) {
-  const head = dev.card.querySelector(".sys-mini");
-  const strip = dev.card.querySelector(".sys-strip");
-  head.innerHTML = "";
-  strip.innerHTML = "";
-  for (const metric of SYS_METRICS) {
-    const v = m[metric.key];
-    const chip = document.createElement("span");
-    chip.className = `sys-chip ${sysLevel(metric, v)}`;
-    const txt = v === null || v === undefined || v === "" ? "—" : Math.round(v);
-    chip.textContent = `${metric.label} ${txt}${v === null ? "" : metric.unit}`;
-    (HEAD_SYS_KEYS.has(metric.key) ? head : strip).appendChild(chip);
-  }
-  // 過熱/欠壓降頻旗標（"0x0" = 正常；非 0 才顯示，且一律紅）
-  if (m.throttled && m.throttled !== "0x0") {
-    const flag = document.createElement("span");
-    flag.className = "sys-chip crit";
-    flag.textContent = "⚠ 降頻/欠壓";
-    flag.title = `vcgencmd get_throttled = ${m.throttled}`;
-    strip.appendChild(flag);
-  }
-}
-
-function setupSysCharts(dev) {
-  const dpr = window.devicePixelRatio || 1;
-  for (const c of dev.sysChans) {
-    const cssW = c.canvas.clientWidth || 300;
-    const cssH = c.canvas.clientHeight || 64;
-    c.canvas.width = Math.round(cssW * dpr);
-    c.canvas.height = Math.round(cssH * dpr);
-    c.ctx = c.canvas.getContext("2d");
-    c.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    c.w = cssW; c.h = cssH;
-  }
-}
-
-function drawSysCharts(dev) {
-  for (let i = 0; i < SYS_METRICS.length; i++) drawSysChart(dev, i);
-}
-
-/** 單一指標的趨勢折線：門檻虛線（黃/紅）+ 資料線，缺值處斷線 */
-function drawSysChart(dev, mi) {
-  const metric = SYS_METRICS[mi], c = dev.sysChans[mi];
-  if (!c.ctx) return;
-  const ctx = c.ctx, w = c.w, h = c.h;
-  const hist = dev.sysHist;
-  ctx.clearRect(0, 0, w, h);
-
-  const yOf = (val) => {
-    const r = (val - metric.min) / (metric.max - metric.min);
-    return h - Math.max(0, Math.min(1, r)) * h;
-  };
-  // 門檻參考線
-  ctx.setLineDash([3, 3]);
-  ctx.lineWidth = 1;
-  for (const [lvl, cssCol] of [[metric.warn, "--amber"], [metric.crit, "--red"]]) {
-    if (lvl <= metric.min || lvl >= metric.max) continue;
-    ctx.strokeStyle = cssVar(cssCol);
-    ctx.globalAlpha = 0.35;
-    ctx.beginPath();
-    ctx.moveTo(0, yOf(lvl) + 0.5);
-    ctx.lineTo(w, yOf(lvl) + 0.5);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-  ctx.setLineDash([]);
-
-  const n = hist.length;
-  if (n) {
-    const dx = n > 1 ? w / (n - 1) : 0;
-    ctx.strokeStyle = cssVar("--sys-line");
-    ctx.lineWidth = 2;
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    let pen = false;
-    for (let i = 0; i < n; i++) {
-      const v = hist[i][metric.key];
-      if (v === null || v === undefined || v === "") { pen = false; continue; }
-      const x = i * dx, y = yOf(v);
-      if (!pen) { ctx.moveTo(x, y); pen = true; }
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-  }
-
-  // 目前數值（依門檻上色）
-  let latest = null;
-  for (let i = n - 1; i >= 0; i--) {
-    const v = hist[i][metric.key];
-    if (v !== null && v !== undefined && v !== "") { latest = v; break; }
-  }
-  c.valEl.textContent = latest === null ? "—" : `${Math.round(latest)}${metric.unit}`;
-  c.valEl.className = `sys-chart-val ${metric.key} ${sysLevel(metric, latest)}`;
 }
 
 // ── 播放迴圈：緩衝偏離目標 → 播放速率 ±15% 微調，永不暫停 ────────
@@ -599,33 +434,23 @@ function onDeviceInfo(dev, m) {
     `設備: ${i.name || "—"}  ID:${i.id || "—"}  Rev:${i.revision || "—"}  MEDIBUS:${i.medibus || "—"}`;
 }
 
-function onSys(dev, m) {
-  renderSysStrip(dev, m);
-  dev.sysHist.push(m);
-  if (dev.sysHist.length > SYS_HIST_MAX) dev.sysHist.shift();
-  // 放大檢視中才需重畫趨勢圖與明細（收合時只更新小字列即可）
-  if (dev.big) {
-    const fmt = (v, u) => (v === null || v === undefined || v === "" ? "—" : `${v}${u}`);
-    dev.card.querySelector(".sys-info-line").textContent =
-      `剩餘空間 ${fmt(m.disk_free, " GB")}　開機時長 ${fmtUptime(m.uptime)}` +
-      `　降頻旗標 ${m.throttled || "—"}`;
-    drawSysCharts(dev);
-  }
-}
-
-function fmtUptime(sec) {
-  if (sec === null || sec === undefined || sec === "") return "—";
-  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600),
-        mi = Math.floor((sec % 3600) / 60);
-  return d > 0 ? `${d}天${h}時` : h > 0 ? `${h}時${mi}分` : `${mi}分`;
+/** 管理員從管理頁移除離線裝置 → 這裡同步拿掉卡片 */
+function onDeviceRemoved(id) {
+  const dev = devices.get(id);
+  if (!dev) return;
+  if (dev.big) overlay.classList.add("hidden");
+  dev.card.remove();
+  devices.delete(id);
+  if (!devices.size) emptyHint.classList.remove("hidden");
 }
 
 // 訊息類型 → 處理函式（新增有狀態類型：加一行 + 寫 onXxx，snapshot 自動生效）
+// 注意：sys（Pi 機器健康狀態）只在管理頁顯示，本頁刻意不註冊 → 走未知類型忽略
 const MSG_HANDLERS = {
   wave: onWave, link: onLink, status: onStatus,
-  params: onParams, device_info: onDeviceInfo, alarm: onAlarm, sys: onSys,
+  params: onParams, device_info: onDeviceInfo, alarm: onAlarm,
 };
-const SNAPSHOT_KEYS = ["status", "params", "device_info", "alarm", "sys"];
+const SNAPSHOT_KEYS = ["status", "params", "device_info", "alarm"];
 
 function dispatch(m) {
   if (m.type === "snapshot") {
@@ -638,6 +463,7 @@ function dispatch(m) {
     }
     return;
   }
+  if (m.type === "device_removed") { onDeviceRemoved(m.device); return; }
   if (!m.device) return;
   const handler = MSG_HANDLERS[m.type];
   if (handler) handler(ensureDev(m.device), m);
@@ -649,16 +475,22 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
-    connEl.textContent = "伺服器已啟動";
+    connEl.textContent = "連線";
     connEl.className = "conn online";
   };
   ws.onmessage = (ev) => {
     try { dispatch(JSON.parse(ev.data)); } catch (e) { console.error(e); }
   };
   ws.onclose = () => {
-    connEl.textContent = "● 伺服器斷線，重連中…";
+    connEl.textContent = "斷線重連中";
     connEl.className = "conn offline";
-    setTimeout(connect, 2000);
+    // session 過期（閒置逾時/被登出）→ 導回登入頁，而不是無限重連失敗
+    fetch("/api/me")
+      .then((r) => {
+        if (r.status === 401) location.href = "/login";
+        else setTimeout(connect, 2000);
+      })
+      .catch(() => setTimeout(connect, 2000));
   };
   ws.onerror = () => ws.close();
 }
@@ -670,7 +502,6 @@ window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     devices.forEach(setupCanvases);
-    devices.forEach(redrawSysIfBig);
   }, 200);
 });
 

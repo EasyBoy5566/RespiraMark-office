@@ -9,11 +9,37 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 - 所有訊息都帶 `"type"` 欄位；**收到不認識的 type 一律忽略並記 log**（向前相容）。
 - `hello` 帶協議版本 `"v": 1`；新增欄位不改版號，破壞性變更才進版。
 
+## 傳輸安全（TLS）與登入
+
+**TLS 加密（兩段皆可啟用）**：伺服器 `config.json` 設定 `tls_cert` / `tls_key`（憑證由 `tools/make_certs.py` 一鍵產生：自建 CA + 伺服器憑證）後，TCP ingest 與網頁**同時**改為加密（`https://` 與 `wss://`，port 不變）。Pi 端 `telemetry.json` 設 `"tls": true` 與 `"tls_ca"`（CA 憑證檔路徑）。
+
+- 信任模型是 **CA 釘選**：Pi 與瀏覽器信任的是自建 CA（`ca.pem`），不是單張伺服器憑證。伺服器搬家/換 IP 時，用同一顆 CA 重簽伺服器憑證即可（`make_certs.py` 重跑一次），**Pi 端與瀏覽器端都不用動**。
+- 兩端 TLS 設定必須一致：伺服器開了 TLS，未開 TLS 的 Pi 會連不上（反之亦然）。
+- `ingest_token` 規則不變，與 TLS 疊加使用（TLS 管加密與伺服器身分，token 管「誰可以送資料」）。
+
+**瀏覽器登入**（`auth_enabled`，預設啟用）：`/`、`/ws`、`/history/*`、`/api/me` 皆需登入 session（HttpOnly cookie；閒置逾時 `session_idle_minutes`，0 = 不逾時）。帳號存伺服器 `accounts.json`（**不進 git**；`tools/make_user.py` 建立，密碼僅存 PBKDF2 雜湊），角色分 `viewer`（看板）與 `admin`（含日後管理頁）。驗證為可抽換介面（`monitor/web/auth.py`），日後可改接醫院 AD/LDAP 而不動登入頁與 session 邏輯。連續登入失敗會暫時鎖定該來源 IP。
+
+| 端點 | 說明 |
+|---|---|
+| `GET /login` | 登入頁（未登入存取 `/` 會被導向此頁） |
+| `POST /login` | 表單欄位 `username` / `password`；成功 → 設 session cookie 並導向 `/`；失敗 → 導回 `/login?err=1`（鎖定中 `?err=lock`） |
+| `POST /logout` | 登出（清除 session）並導向 `/login` |
+| `GET /api/me` | 目前登入者 `{"auth":true,"username":...,"role":...}`；未登入回 401（前端以此偵測 session 過期並導回登入頁） |
+
+**管理頁（僅 `admin` 角色）**：`/admin` 與 `/api/admin/*` 需要 admin session；viewer 存取 `/admin` 會被導回 `/`、存取 `/api/admin/*` 回 403。未登入存取 `/admin` 導向 `/login`。登入未啟用（開發模式）時不設限。
+
+| 端點 | 說明 |
+|---|---|
+| `GET /admin` | 設備維護管理頁：所有裝置健康總表 + sys 趨勢圖 |
+| `GET /api/admin/accounts` | 帳號唯讀清單 `{"users":[{"username":...,"role":...}]}`（不含密碼雜湊；建立/刪除仍用 `tools/make_user.py`） |
+| `DELETE /api/admin/devices/{device}` | 移除**離線**裝置（清出儀表板版面；裝置重新連上會自動回來）。線上裝置回 409、未知裝置回 404 |
+| `GET /api/admin/syslog/{device}` | 下載該裝置的長期 sys CSV（`sys_<裝置>.csv`）；無檔案（未啟用落地或尚無資料）回 404 |
+
 ## 第一段：Pi → 伺服器（TCP，每行一個 JSON，`\n` 結尾）
 
 連線後第一則必須是 `hello`，否則伺服器斷線。
 
-**存取驗證**：伺服器 `config.json` 設定了 `ingest_token`（非空字串）時，`hello` 必須帶 `token` 欄位且值相符，否則伺服器記 log 後直接斷線；伺服器未設定則忽略此欄位。裝置數達 `max_devices` 上限時，新裝置的 `hello` 一律拒絕（既有裝置重連不受影響）。token 走明文 TCP，僅用於院內網隔離閒雜裝置，不可視為對抗攻擊者的防線。
+**存取驗證**：伺服器 `config.json` 設定了 `ingest_token`（非空字串）時，`hello` 必須帶 `token` 欄位且值相符，否則伺服器記 log 後直接斷線；伺服器未設定則忽略此欄位。裝置數達 `max_devices` 上限時，新裝置的 `hello` 一律拒絕（既有裝置重連不受影響）。未啟用 TLS 時 token 走明文 TCP，僅用於院內網隔離閒雜裝置；啟用 TLS（見「傳輸安全」）後 token 才受加密保護。
 
 | type | 時機 | 欄位 |
 |---|---|---|
@@ -48,12 +74,13 @@ Pi 端在遙測背景執行緒每 ~5s 取樣一次（純標準庫讀 `/proc`、`
 
 ## 第二段：伺服器 → 瀏覽器（WebSocket `/ws`，每則一個 JSON）
 
-Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另外產生兩種：
+Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另外產生三種：
 
 | type | 說明 |
 |---|---|
 | `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`/`sys`）的最新一則 |
 | `link` | Pi 與伺服器的連線狀態：`online` true/false（上線時附 `patient`）。注意這與 `status`（Pi 與呼吸器的串口狀態）是兩件事 |
+| `device_removed` | 管理員從管理頁移除離線裝置時廣播：`device` 機台編號。所有觀看端（儀表板與管理頁）應移除該裝置的畫面元素 |
 
 `sys` 亦原樣轉發（加 `device`）。趨勢圖歷史另走 HTTP（不佔 WebSocket）：
 
