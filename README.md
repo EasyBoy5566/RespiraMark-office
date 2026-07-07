@@ -84,6 +84,15 @@ python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩
 
 把顯示的 token 複製到該台 Pi 的 `telemetry.json` 的 `token` 欄位。`devices.json` 一旦存在，伺服器就改用這個模式；外洩或懷疑外洩時只需停用/換發該台，不影響其他 Pi（範本見 `devices.json.example`）。
 
+## 升級相依套件
+
+`requirements.txt` 鎖定確切版本（不用 `>=`），避免醫院機器裝到跟開發環境不同的版本、行為不可重現。要升級時：
+
+1. 開一個乾淨的虛擬環境（`python -m venv .venv-test`），`pip install -r requirements.txt` 改成新版本號先裝裝看
+2. 跑 `python -m unittest discover -s tests -v` 與 `python tests/smoke_test.py`，全過才繼續
+3. 觀察至少一晚（`tools/soak_monitor.ps1`）確認記憶體/CPU 無異常
+4. 全部沒問題才更新 `requirements.txt` 的版本號、上正式機
+
 ## 換環境部署（家裡 → 醫院）
 
 | 階段 | Pi 端 | 伺服器端 |

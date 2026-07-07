@@ -1,4 +1,4 @@
-aiohttp>=3.8
+﻿aiohttp==3.14.1
 
 # 僅 tools/make_certs.py（產 TLS 憑證）需要；伺服器運行本體不使用
-cryptography>=41
+cryptography==46.0.5
