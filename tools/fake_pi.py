@@ -171,9 +171,11 @@ def run_session(args, model, sysmodel):
             alarm_on = not alarm_on                # 每 20 秒切換 觸發/解除
             alarms = []
             if alarm_on:
-                alarms.append({"prio": 28, "code": "10", "text": "PAW HIGH"})
+                # 三個等級都覆蓋（對照 alarm_levels.js 已確認的真實對照表），方便開發時看三色
+                alarms.append({"prio": 28, "code": "10", "cp": 1, "text": "PAW HIGH"})
+                alarms.append({"prio": 3, "code": "9C", "cp": 2, "text": "LEAKAGE"})
                 if random.random() < 0.5:
-                    alarms.append({"prio": 12, "code": "4B", "text": "BATTERY LOW"})
+                    alarms.append({"prio": 12, "code": "93", "cp": 2, "text": "APNEA VENT"})
             send_lines(sock, [{"type": "alarm", "alarms": alarms}])
             print(f"[{args.device}] 警報 {'觸發' if alarm_on else '解除'}: "
                   f"{[a['text'] for a in alarms] or '—'}")

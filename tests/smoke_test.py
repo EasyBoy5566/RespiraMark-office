@@ -125,7 +125,8 @@ async def run_checks():
         async with s.get(f"{BASE}/") as r:
             check("未登入自動導向登入頁", r.status == 200 and r.url.path == "/login")
         for path in ("/static/app.js", "/static/style.css", "/static/login.js",
-                     "/static/sys.js", "/static/auth.js", "/static/admin.js"):
+                     "/static/sys.js", "/static/auth.js", "/static/admin.js",
+                     "/static/alarm_levels.js"):
             async with s.get(f"{BASE}{path}") as r:
                 check(f"靜態資源 {path}", r.status == 200)
         async with s.get(f"{BASE}/history/smoke-01") as r:
@@ -174,6 +175,8 @@ async def run_checks():
         alarms = (d2.get("alarm") or {}).get("alarms") or []
         check("snapshot 含 alarm 快照（--alarms 裝置）",
               len(alarms) >= 1 and "text" in alarms[0], str(alarms)[:80])
+        check("alarm 帶 cp 欄位（codepage，供分級對照表消除同碼歧義）",
+              len(alarms) >= 1 and "cp" in alarms[0], str(alarms)[:80])
 
     waves = [m for m in msgs if m["type"] == "wave"]
     src = {m["device"] for m in waves}

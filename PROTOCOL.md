@@ -48,11 +48,29 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `params` | 慢數據輪詢後（~5s） | `mode` 通氣模式、`features` 附加功能、`settings` 設定值 dict、`measured` 量測值 dict、`ts` |
 | `status` | 呼吸器連線狀態變化 | `state`（connected / connecting / disconnected）、`msg` 顯示文字、`ts` |
 | `device_info` | 取得設備 ID 後 | `info`：`id`/`name`/`revision`/`medibus`、`ts` |
-| `alarm` | 警報狀態變化時（**全量**） | `alarms` 陣列，每項 `{prio, code, text}`；prio 1~31（31 最高，同 MEDIBUS）；**空陣列 = 全部解除**、`ts` |
+| `alarm` | 警報狀態變化時（**全量**） | `alarms` 陣列，每項 `{prio, code, cp, text}`；prio 1~31（31 最高，同 MEDIBUS）；`cp` 為來源 codepage（`1`=MEDIBUS 27H、`2`=MEDIBUS 2EH）——同一 `code` 在不同 codepage 意義不同，office 端依 `(cp, code)` 查對照表決定臨床分級與顯示全名（見「警報分級」一節）；**空陣列 = 全部解除**、`ts` |
 | `sys` | Pi 自身系統狀態（每 ~5s） | 見下表，各欄皆可為 `null`（該項當下取不到）、`ts` |
 | `ping` | 閒置 ≥2s 心跳 | `ts` |
 
 註：`alarm` 全鏈已實作——Pi 端隨慢數據輪詢（MEDIBUS 27H/2EH，約每 5 秒）取得警報，內容變化時全量送出；開發 UI 亦可用 `tools/fake_pi.py --alarms` 模擬。
+
+### 警報分級（office 端呈現）
+
+MEDIBUS 警報碼本身不含臨床嚴重度分級，且 codepage 1（27H）與 codepage 2（2EH）的
+`code` 會重複但意義不同，因此 office 端用 `(cp, code)` 查對照表，決定：
+
+| Level | 意義 | 顏色 |
+|---|---|---|
+| 1 | 危及生命 | 紅 |
+| 2 | 可能危及生命 | 黃 |
+| 3 | 不影響生命 | 淡藍 |
+
+對照表（`(cp, code)` → `{level, name}`）維護在 `monitor/web/static/alarm_levels.js`，
+由使用者依實際連接的呼吸器型號填寫（**不在 Pi 端**：好處是修改一次、所有連線中的 Pi
+立刻套用，不需要改 Pi 端程式碼或重啟呼吸器監測程式）。查無對照的警報碼 → 預設
+level 2、顯示裝置原始縮寫文字（`text`）。同一裝置多筆警報依 level 由高至低排序後
+顯示在同一列；只有 level 1／2 存在時卡片才標示警示外框，level 3（不影響生命）只在
+列表中以淡藍顯示，不觸發卡片警示外框。
 
 ### `sys`（Pi 系統健康狀態）
 

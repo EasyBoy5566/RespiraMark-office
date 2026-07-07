@@ -20,7 +20,8 @@
   --c-volume:   #76FF03;
   --grid:       #24364F;                    /* 波形零線/格線 */
   --trig:       rgba(255, 234, 0, 0.55);    /* Trigger 標記（#FFEA00 半透明） */
-  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 警報列底色 */
+  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 警報列底色（level 1 危及生命） */
+  --warn-bg:    rgba(255, 179, 0, 0.12);    /* 警報列底色（level 2 可能危及生命） */
   --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
   --sys-line:   #56A6FF;                     /* 系統狀態趨勢折線 */
   --blue:       #2F80ED;                     /* Primary Medical Blue（官方色盤） */
@@ -48,6 +49,7 @@
   --grid:       #C3CFDE;
   --trig:       rgba(191, 144, 0, 0.6);
   --alarm-bg:   rgba(213, 0, 0, 0.08);
+  --warn-bg:    rgba(178, 110, 0, 0.10);
   --overlay-bg: rgba(237, 241, 247, 0.96);
   --sys-line:   #0277BD;
   --blue:       #1C6ED5;                     /* 淺色底用 Active Blue，對比較足 */
@@ -150,17 +152,27 @@ main#grid {
 .link-status.on  { color: var(--green); }
 .link-status.off { color: var(--red); }
 
-/* ── 警報列（無警報時隱藏；資料由 alarm 訊息驅動）─────────── */
+/* ── 警報列（無警報時隱藏；資料由 alarm 訊息驅動，分級見 alarm_levels.js）───
+ * 底色/邊線依目前最嚴重等級變化；level 3（不影響生命）維持中性色，
+ * 不觸發卡片警示外框（見下方 .card.alarming-*，故意沒有 -3 版本）*/
 .alarm-bar {
   display: flex; flex-wrap: wrap; gap: 4px 16px;
   padding: 5px 12px;
-  background: var(--alarm-bg);
-  border-bottom: 1px solid var(--red);
-  font-size: 14px; font-weight: bold;
-  color: var(--red);
+  font-size: 14px;
+  border-bottom: 1px solid var(--divider);
 }
-.card.alarming { border-color: var(--red); }
-.card.alarming .card-head { border-left: 4px solid var(--red); }
+.alarm-bar.lvl-1 { background: var(--alarm-bg); border-bottom-color: var(--red); }
+.alarm-bar.lvl-2 { background: var(--warn-bg); border-bottom-color: var(--amber); }
+
+.alarm-item { font-weight: bold; white-space: nowrap; }
+.alarm-item.lvl-1 { color: var(--red); }
+.alarm-item.lvl-2 { color: var(--amber); }
+.alarm-item.lvl-3 { color: var(--sys-line); font-weight: normal; }
+
+.card.alarming-1 { border-color: var(--red); }
+.card.alarming-1 .card-head { border-left: 4px solid var(--red); }
+.card.alarming-2 { border-color: var(--amber); }
+.card.alarming-2 .card-head { border-left: 4px solid var(--amber); }
 
 /* ── 波形區 ─────────────────────────────────────────────── */
 .waves { padding: 4px 8px 2px; }

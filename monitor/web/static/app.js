@@ -396,23 +396,28 @@ function onParams(dev, m) {
 }
 
 function onAlarm(dev, m) {
-  // 全量更新：alarms 為目前所有警報（空陣列 = 解除），依優先級高→低排序
-  const alarms = (m.alarms || []).slice().sort((a, b) => (b.prio || 0) - (a.prio || 0));
+  // 全量更新：alarms 為目前所有警報（空陣列 = 解除）。
+  // 依分級（RMAlarm，見 alarm_levels.js）由重到輕排序，同級再依 MEDIBUS 優先級高→低。
+  const alarms = (m.alarms || [])
+    .map((a) => Object.assign({}, a, RMAlarm.classify(a)))
+    .sort((a, b) => (a.level - b.level) || ((b.prio || 0) - (a.prio || 0)));
+
   const bar = dev.card.querySelector(".alarm-bar");
   bar.innerHTML = "";
-  if (alarms.length) {
-    for (const a of alarms) {
-      const item = document.createElement("span");
-      item.className = "alarm-item";
-      item.textContent = `⚠ ${a.text || a.code || "ALARM"}`;
-      bar.appendChild(item);
-    }
-    bar.classList.remove("hidden");
-    dev.card.classList.add("alarming");
-  } else {
-    bar.classList.add("hidden");
-    dev.card.classList.remove("alarming");
+  bar.className = "alarm-bar hidden";
+  // level 3（不影響生命）不觸發卡片警示外框，只在列表中以淡藍顯示
+  dev.card.classList.remove("alarming-1", "alarming-2");
+  if (!alarms.length) return;
+
+  for (const a of alarms) {
+    const item = document.createElement("span");
+    item.className = `alarm-item lvl-${a.level}`;
+    item.textContent = `${a.level === 3 ? "•" : "⚠"} ${a.name}`;
+    bar.appendChild(item);
   }
+  const worst = alarms[0].level;      // 已依分級排序，第一筆就是目前最嚴重的等級
+  bar.className = `alarm-bar lvl-${worst}`;
+  if (worst <= 2) dev.card.classList.add(`alarming-${worst}`);
 }
 
 function fillTable(el, obj) {
