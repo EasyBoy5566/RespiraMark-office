@@ -1,6 +1,6 @@
 # RespiraMark Office — 醫院部署前 資安與功能評估暨改善計畫
 
-- 文件版本：v1.1（2026-07-07；追加：Phase 5 資訊室需求清單具體化＋附錄 C、新增 W-307 院內帳號整合）
+- 文件版本：v1.2（2026-07-07；Phase 0 + Phase 1 全數完成並打 tag `v0.10.0`，F-01～F-15 已關閉，詳見第二節「狀態」欄）
 - 評估範圍：respiramark-office 全部程式碼（後端 `main.py` + `monitor/`、前端 `monitor/web/static/`、工具 `tools/`、測試 `tests/`）、與 Pi 端遙測客戶端（`respiramark-pi/respiramark/web/telemetry_client.py`）的介接、伺服器部署方式
 - 文件用途：作為醫院上線前的**工作清單與驗收依據**。每個工作項目（W-xxx）都有對應測試項目（T-xxx），照 Phase 順序逐一完成、逐一勾選，全部完成即可移轉到醫院伺服器
 - 遵循原則：所有改善方案均符合本專案 CLAUDE.md 鐵則（相依只有 aiohttp、前端零框架、資料不離開院內網、病人代碼不進 log）
@@ -15,16 +15,18 @@ Pi #1..#16 ──TCP :8765（JSON Lines，TLS 可選，共用 token）──▶ 
 瀏覽器（護理站/管理員）◀──HTTPS :8080 + WebSocket /ws（登入 session）─┘
 ```
 
-| 面向 | 現況 |
+| 面向 | 現況（Phase 1 完成後，2026-07-07） |
 |---|---|
-| 程式架構 | 三層（transport / domain / web），composition root 在 main.py，架構清晰 |
+| 程式架構 | 三層（transport / domain / web），composition root 在 main.py；新增中性共用模組 `monitor/crypto.py`、`monitor/audit.py`（config.py 同層級，供任一層 import） |
 | 傳輸加密 | 自建 CA + TLS 1.2+（兩個 port 同時加密），CA 釘選，憑證缺失時拒絕啟動（不會靜默退回明文） |
-| Pi 端驗證 | `ingest_token` 單一共用權杖（hello 訊息比對） |
-| 瀏覽器驗證 | 帳密登入（PBKDF2-SHA256 20 萬次雜湊）、伺服器端 session、HttpOnly/SameSite=Lax/Secure cookie、閒置逾時、viewer/admin 角色、登入失敗 IP 鎖定 |
+| Pi 端驗證 | **每台裝置獨立 token**（`devices.json` + `tools/make_device.py`，PBKDF2 雜湊）；未設定 `devices.json` 時退回單一共用 `ingest_token`（向後相容）。ingest 另有連線數上限、hello/閒置逾時、訊息格式驗證 |
+| 瀏覽器驗證 | 帳密登入（PBKDF2-SHA256 60 萬次雜湊）、伺服器端 session（閒置逾時 + 絕對逾時 + 總量上限定期掃除）、HttpOnly/SameSite=Lax/Secure cookie、viewer/admin 角色、登入失敗雙鍵鎖定（IP+帳號 與 IP 總量兩層） |
+| HTTP 安全 | 安全標頭 middleware（CSP `default-src 'self'`、X-Frame-Options、X-Content-Type-Options、Referrer-Policy、TLS 時 HSTS）；`/ws` Origin 同源檢查 |
+| 審計 | `logs/audit.log`（10MB×5 輪替）記錄登入/登出、管理操作、裝置上下線與被拒事件，內建病人代碼/密碼/token 防呆 |
 | 資料落地 | 波形/參數/警報**皆不落地**（只在記憶體）；僅 Pi 系統健康 CSV（不含病人代碼） |
 | 前端 | 原生 HTML/CSS/JS，零外部資源（無 CDN），使用者資料以 textContent 寫入（防 XSS 的正確作法） |
-| 測試 | hub 單元測試 + 端對端冒煙測試（涵蓋 TLS、登入、token、角色權限、管理功能） |
-| 部署方式 | 手動雙擊 start_server.bat；無服務化、無開機自啟、log 只印在主控台 |
+| 測試 | 50 項單元測試（hub / auth / crypto / device_auth / ingest 裝置模式）+ 端對端冒煙測試（涵蓋 TLS、登入、每台獨立 token、安全標頭、Origin 檢查、連線防護、審計日誌、角色權限、管理功能） |
+| 部署方式 | 手動雙擊 start_server.bat；**尚無**服務化、開機自啟（Phase 2 W-202，待辦） |
 
 ### 已具備、應保留的資安設計（評估結論：基礎良好）
 
@@ -37,6 +39,9 @@ Pi #1..#16 ──TCP :8765（JSON Lines，TLS 可選，共用 token）──▶ 
 7. CSV 下載端點的裝置名有 `_safe_name()` 過濾（無路徑穿越）；靜態檔服務未開目錄列表
 8. ingest 有單行長度上限、裝置數上限、壞 JSON 容錯不崩潰；廣播佇列滿丟最舊絕不回壓
 9. 冒煙測試把「未登入被拒、錯密碼被拒、錯 token 被斷線、viewer 進不了管理頁」都當必過項
+10.（Phase 1 新增）每台 Pi 獨立 token，外洩只需停用/換發該台，不影響其他裝置
+11.（Phase 1 新增）ingest 連線數/hello/閒置逾時三重防護，訊息格式驗證，觀看端數上限
+12.（Phase 1 新增）CSP 等安全標頭、`/ws` Origin 檢查、審計日誌、session 絕對逾時與雙鍵登入鎖定
 
 ---
 
@@ -44,25 +49,25 @@ Pi #1..#16 ──TCP :8765（JSON Lines，TLS 可選，共用 token）──▶ 
 
 嚴重度定義：🔴 高（醫院上線前必須處理）、🟠 中（強烈建議上線前處理）、🟡 低（可排程處理）。
 
-| 編號 | 嚴重度 | 位置 | 風險說明 | 對應工作 |
-|---|---|---|---|---|
-| F-01 | 🔴 | ingest / 全部 Pi | **所有 Pi 共用同一個固定 token**：任何一台 Pi 的 telemetry.json 外洩（或維修時被複製），拿到 token 的人就能冒充任何機台送假資料，且無法只撤銷一台——只能全部換 token、逐台重設 | W-104 |
-| F-02 | 🟠 | ingest.py | **無連線數上限、無 hello 逾時、無閒置逾時**：連上 8765 後不送任何資料的連線會永久佔用資源；區網內任何裝置可開大量連線耗盡伺服器（max_devices 只限制「已註冊裝置」，不限制 TCP 連線本身） | W-101 |
-| F-03 | 🟠 | ingest.py / hub.py | **訊息無格式驗證**：單行上限 512KB 且原樣廣播給所有觀看端。持有 token 的異常裝置可送超大 params/wave 灌爆觀看端與伺服器記憶體（每觀看端佇列 300 則 × 512KB ≈ 150MB） | W-102 |
-| F-04 | 🟠 | routes.py | **缺 HTTP 安全標頭**：無 CSP、X-Frame-Options、X-Content-Type-Options、Referrer-Policy、HSTS。本專案前端零外部資源，CSP 可以直接鎖 `default-src 'self'`，成本低效果好 | W-105 |
-| F-05 | 🟠 | routes.py | **/ws 未驗證 Origin**：目前靠 SameSite=Lax cookie 擋跨站 WebSocket 挾持，單層防禦；加 Origin 同源檢查是標準縱深作法 | W-106 |
-| F-06 | 🟠 | 全域 | **無審計日誌、無檔案日誌**：登入成功/失敗、管理操作（移除裝置、下載 CSV）只印在主控台，視窗一關全部消失。醫院環境需要可回溯的操作紀錄 | W-109、W-201 |
-| F-07 | 🟡 | ingest.py:47 | token 比對用 `!=`（非常數時間）。區網內利用時間差猜 token 難度高，但修正只要一行 `hmac.compare_digest` | W-103 |
-| F-08 | 🟡 | auth.py | 登入鎖定**只看來源 IP**：護理站多人共用同一台電腦/出口 IP 時，任何人連錯 5 次密碼會鎖住所有人 10 分鐘（可被惡意利用做拒絕服務）。建議改「IP+帳號」併用計數 | W-107 |
-| F-09 | 🟡 | auth.py | 看板模式（idle=0）session **永不過期且無總量上限**：長年運行下 session 與失敗記錄字典會累積；遺失的看板電腦其 session 無法被撤銷（沒有「登出所有裝置」） | W-107 |
-| F-10 | 🟡 | auth.py:29 | PBKDF2 迭代 20 萬次（OWASP 2023 對 SHA256 的建議為 60 萬次）。雜湊格式已含迭代數，提高後舊帳號仍可登入，零風險升級 | W-108 |
-| F-11 | 🟡 | aiohttp 預設 | 回應帶 `Server: Python/x.x aiohttp/x.x` 標頭，洩漏元件版本（給攻擊者選 exploit 用） | W-105 |
-| F-12 | 🟡 | requirements.txt | 相依未鎖版本（`aiohttp>=3.8`）：醫院機器安裝時可能裝到與開發環境不同的版本，行為不可重現，也無升級管控程序 | W-110 |
-| F-13 | 🟡 | 部署面 | 憑證私鑰、accounts.json 無檔案權限規範（Windows 上預設同機使用者皆可讀）；**ca.key（發證私鑰）長駐伺服器**——被拿走等於能簽出任何受信任憑證 | W-204 |
-| F-14 | 🟡 | auth.py | 登入表單無 CSRF token（SameSite=Lax 已擋跨站帶 cookie 的 POST，殘餘風險為「login CSRF」，院內網情境影響很小） | W-107（低優先，併入處理） |
-| F-15 | 🟡 | hub.py | 觀看端（WebSocket viewer）數量無上限：登入者開大量分頁可耗伺服器記憶體 | W-102 |
-| F-16 | 🟠 | 部署面 | **無服務化**：程式崩潰或伺服器重開機後不會自動恢復——中央監視這種「要一直活著」的系統，可用性本身就是安全需求 | W-202 |
-| F-17 | 🟡 | hub.py | 同 token 者可用相同 device id 頂替既有裝置（conn_seq 設計上允許重連）。做完 W-104（每台 token 不同）後此風險自然收斂；另建議 log 記錄來源 IP 變化以利追查 | W-104 |
+| 編號 | 嚴重度 | 位置 | 風險說明 | 對應工作 | 狀態 |
+|---|---|---|---|---|---|
+| F-01 | 🔴 | ingest / 全部 Pi | **所有 Pi 共用同一個固定 token**：任何一台 Pi 的 telemetry.json 外洩（或維修時被複製），拿到 token 的人就能冒充任何機台送假資料，且無法只撤銷一台——只能全部換 token、逐台重設 | W-104 | ✅ 已處理 |
+| F-02 | 🟠 | ingest.py | **無連線數上限、無 hello 逾時、無閒置逾時**：連上 8765 後不送任何資料的連線會永久佔用資源；區網內任何裝置可開大量連線耗盡伺服器（max_devices 只限制「已註冊裝置」，不限制 TCP 連線本身） | W-101 | ✅ 已處理 |
+| F-03 | 🟠 | ingest.py / hub.py | **訊息無格式驗證**：單行上限 512KB 且原樣廣播給所有觀看端。持有 token 的異常裝置可送超大 params/wave 灌爆觀看端與伺服器記憶體（每觀看端佇列 300 則 × 512KB ≈ 150MB） | W-102 | ✅ 已處理 |
+| F-04 | 🟠 | routes.py | **缺 HTTP 安全標頭**：無 CSP、X-Frame-Options、X-Content-Type-Options、Referrer-Policy、HSTS。本專案前端零外部資源，CSP 可以直接鎖 `default-src 'self'`，成本低效果好 | W-105 | ✅ 已處理（CSP 仍需人工開瀏覽器抽查，見下方） |
+| F-05 | 🟠 | routes.py | **/ws 未驗證 Origin**：目前靠 SameSite=Lax cookie 擋跨站 WebSocket 挾持，單層防禦；加 Origin 同源檢查是標準縱深作法 | W-106 | ✅ 已處理 |
+| F-06 | 🟠 | 全域 | **無審計日誌、無檔案日誌**：登入成功/失敗、管理操作（移除裝置、下載 CSV）只印在主控台，視窗一關全部消失。醫院環境需要可回溯的操作紀錄 | W-109、W-201 | ✅ 審計日誌已處理（W-109）；一般伺服器 log 落地仍待 W-201（Phase 2） |
+| F-07 | 🟡 | ingest.py:47 | token 比對用 `!=`（非常數時間）。區網內利用時間差猜 token 難度高，但修正只要一行 `hmac.compare_digest` | W-103 | ✅ 已處理 |
+| F-08 | 🟡 | auth.py | 登入鎖定**只看來源 IP**：護理站多人共用同一台電腦/出口 IP 時，任何人連錯 5 次密碼會鎖住所有人 10 分鐘（可被惡意利用做拒絕服務）。建議改「IP+帳號」併用計數 | W-107 | ✅ 已處理 |
+| F-09 | 🟡 | auth.py | 看板模式（idle=0）session **永不過期且無總量上限**：長年運行下 session 與失敗記錄字典會累積；遺失的看板電腦其 session 無法被撤銷（沒有「登出所有裝置」） | W-107 | ✅ 已處理（絕對逾時＋定期掃除＋總量上限） |
+| F-10 | 🟡 | auth.py:29 | PBKDF2 迭代 20 萬次（OWASP 2023 對 SHA256 的建議為 60 萬次）。雜湊格式已含迭代數，提高後舊帳號仍可登入，零風險升級 | W-108 | ✅ 已處理（60 萬次） |
+| F-11 | 🟡 | aiohttp 預設 | 回應帶 `Server: Python/x.x aiohttp/x.x` 標頭，洩漏元件版本（給攻擊者選 exploit 用） | W-105 | ✅ 已處理 |
+| F-12 | 🟡 | requirements.txt | 相依未鎖版本（`aiohttp>=3.8`）：醫院機器安裝時可能裝到與開發環境不同的版本，行為不可重現，也無升級管控程序 | W-110 | ✅ 已處理（過程中另發現並修正 cp950 環境下 pip 解析 requirements.txt 失敗的問題） |
+| F-13 | 🟡 | 部署面 | 憑證私鑰、accounts.json 無檔案權限規範（Windows 上預設同機使用者皆可讀）；**ca.key（發證私鑰）長駐伺服器**——被拿走等於能簽出任何受信任憑證 | W-204 | ⬜ 待處理（Phase 2，需在正式伺服器上執行） |
+| F-14 | 🟡 | auth.py | 登入表單無 CSRF token（SameSite=Lax 已擋跨站帶 cookie 的 POST，殘餘風險為「login CSRF」，院內網情境影響很小） | W-107（低優先，併入處理） | ⬜ 評估後暫不處理（見 W-107 說明：院內網情境下複雜度與效益不成比例） |
+| F-15 | 🟡 | hub.py | 觀看端（WebSocket viewer）數量無上限：登入者開大量分頁可耗伺服器記憶體 | W-102 | ✅ 已處理 |
+| F-16 | 🟠 | 部署面 | **無服務化**：程式崩潰或伺服器重開機後不會自動恢復——中央監視這種「要一直活著」的系統，可用性本身就是安全需求 | W-202 | ⬜ 待處理（Phase 2） |
+| F-17 | 🟡 | hub.py | 同 token 者可用相同 device id 頂替既有裝置（conn_seq 設計上允許重連）。做完 W-104（每台 token 不同）後此風險自然收斂；另建議 log 記錄來源 IP 變化以利追查 | W-104 | ⚠️ 部分處理：核心風險已消除（每台獨立 token）；裝置被拒事件的來源 IP 已進審計日誌，但裝置正常上線事件目前未記來源 IP，尚無自動化比對 |
 
 > 補充說明（不列風險、屬確認事項）：波形/參數/警報不落地、病人代碼只在記憶體與畫面——資料靜態外洩面極小，這是此系統天然的資安優勢，改善計畫刻意**不**增加臨床資料落地（除非日後明確需求，屆時再議加密儲存）。
 
@@ -124,6 +129,12 @@ Pi #1..#16 ──TCP :8765（JSON Lines，TLS 可選，共用 token）──▶ 
 | W-110 | 鎖定相依版本（F-12）：requirements.txt 改 `aiohttp==x.y.z`、`cryptography==x.y`；README 補「升級 SOP：改版→乾淨 venv 安裝→跑全部測試→soak 一晚→才上正式機」 | requirements.txt、README | T-110：全新 venv `pip install -r requirements.txt` + 全部測試通過 | S |
 
 **Phase 1 完成定義**：F-01～F-15 全數關閉或降級為「已接受之殘餘風險」；smoke_test 擴充後全過；打 tag `v0.10.0`。
+
+**✅ 已於 2026-07-07 完成並打 tag `v0.10.0`。** 單元測試由 17 項擴充到 50 項、冒煙測試新增連線防護/裝置權杖/安全標頭/Origin/審計日誌等斷言，全數通過。F-14（CSRF）評估後決定暫不處理（見 W-107 說明）；F-13/F-16 需要正式伺服器環境才能執行，留待 Phase 2/5。
+
+**尚需人工確認的項目**（自動化測試涵蓋不到）：
+- CSP 安全標頭上線後請實際開瀏覽器過一次儀表板/管理頁/登入頁＋深淺主題切換，確認沒有功能被誤傷（W-105）
+- 長時間運行下 session 掃除、ingest 連線逾時等行為建議在 Phase 4 的 72 小時 soak 測試中一併觀察
 
 ### Phase 2 — 營運強化（Windows 伺服器）
 
