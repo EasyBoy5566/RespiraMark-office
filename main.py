@@ -71,6 +71,21 @@ def build_auth_manager(cfg: dict, tls_on: bool):
     return mgr
 
 
+def setup_server_log(cfg: dict):
+    """一般運行 log 同步寫檔 `logs/server.log`（10MB×5 輪替，UTF-8）；
+    主控台照印不受影響。掛在 root logger，涵蓋 hub/ingest/auth/main 等
+    全部既有 logger。檔案一律 UTF-8——主控台在 cp950 語系 Windows 下
+    印中文常亂碼，但寫檔不受主控台編碼影響（對應 IMPROVEMENT_PLAN.md F-06）。"""
+    log_dir = _resolve(str(cfg.get("log_dir") or "logs"))
+    os.makedirs(log_dir, exist_ok=True)
+    handler = RotatingFileHandler(os.path.join(log_dir, "server.log"),
+                                  maxBytes=10 * 1024 * 1024, backupCount=5,
+                                  encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(handler)
+
+
 def setup_audit_log(cfg: dict):
     """掛上審計日誌的檔案 handler（logs/audit.log，10MB×5 輪替，UTF-8）。
     只寫檔、不印主控台（避免跟一般運行 log 混在一起）；
@@ -131,6 +146,7 @@ async def main():
         datefmt="%H:%M:%S",
     )
     cfg = load_config(args.config)
+    setup_server_log(cfg)
     setup_audit_log(cfg)
 
     sys_log_dir = _resolve(str(cfg.get("sys_log_dir") or ""))
