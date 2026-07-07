@@ -22,7 +22,7 @@ import sys
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from monitor.web.auth import hash_password  # noqa: E402
+from monitor.crypto import hash_password  # noqa: E402
 
 
 def load_accounts(path: str) -> dict:

@@ -15,8 +15,6 @@
 - 純標準庫 + aiohttp（遵守 CLAUDE.md §2.3 相依規則）
 """
 
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -25,8 +23,9 @@ import time
 
 from aiohttp import web
 
+from monitor.crypto import hash_password, verify_password  # noqa: F401 (對外沿用既有匯入路徑)
+
 COOKIE_NAME = "rm_session"
-PBKDF2_ITERATIONS = 200_000
 
 # 不需登入即可存取的路徑（登入頁本身與靜態資源；資料端點一律受保護）
 PUBLIC_PATHS = {"/login"}
@@ -42,26 +41,6 @@ PAGE_PATHS = {"/", "/admin"}
 # 登入失敗鎖定：同一 IP 在視窗內失敗達上限 → 拒絕直到視窗滑出
 FAIL_WINDOW = 600.0     # 秒
 FAIL_MAX = 5
-
-
-def hash_password(password: str) -> str:
-    """PBKDF2-SHA256 雜湊，格式: pbkdf2_sha256$迭代數$salt(hex)$hash(hex)"""
-    salt = secrets.token_hex(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
-                             bytes.fromhex(salt), PBKDF2_ITERATIONS)
-    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt}${dk.hex()}"
-
-
-def verify_password(password: str, stored: str) -> bool:
-    try:
-        algo, iters, salt, expected = stored.split("$")
-        if algo != "pbkdf2_sha256":
-            return False
-        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
-                                 bytes.fromhex(salt), int(iters))
-        return hmac.compare_digest(dk.hex(), expected)
-    except (ValueError, TypeError):
-        return False
 
 
 # 帳號不存在時也跑一次雜湊比對：讓「帳號存在與否」在回應時間上無差異
