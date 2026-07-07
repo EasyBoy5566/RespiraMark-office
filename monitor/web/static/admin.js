@@ -63,6 +63,7 @@ function buildCard(dev) {
     <div class="admin-card-foot">
       <button type="button" class="admin-btn trend-btn">趨勢 ▾</button>
       <button type="button" class="admin-btn">下載 CSV</button>
+      <button type="button" class="admin-btn">警報紀錄</button>
       <button type="button" class="admin-btn danger">移除</button>
     </div>
     <div class="admin-trend hidden">
@@ -81,10 +82,12 @@ function buildCard(dev) {
     dev.chips[metric.key] = chip.querySelector(".metric-val");
   }
 
-  const [trendBtn, csvBtn, removeBtn] = card.querySelectorAll(".admin-card-foot button");
+  const [trendBtn, csvBtn, alarmBtn, removeBtn] = card.querySelectorAll(".admin-card-foot button");
   trendBtn.addEventListener("click", () => toggleTrend(dev));
   csvBtn.addEventListener("click", () => downloadCsv(dev.id));
   csvBtn.title = "下載這台機器的長期系統狀態紀錄（伺服器端 CSV）";
+  alarmBtn.addEventListener("click", () => downloadAlarmLog(dev.id));
+  alarmBtn.title = "下載這台機器的警報出現/解除歷史紀錄（伺服器端 CSV）";
   removeBtn.addEventListener("click", () => removeDevice(dev.id));
   dev.trendBtn = trendBtn;
   dev.removeBtn = removeBtn;
@@ -190,8 +193,8 @@ function removeDevice(id) {
     .catch(() => alert("移除失敗：無法連線伺服器"));
 }
 
-function downloadCsv(id) {
-  fetch(`/api/admin/syslog/${encodeURIComponent(id)}`)
+function downloadFile(url, filename) {
+  fetch(url)
     .then((r) => {
       if (!r.ok) return r.json().then((j) => { alert(j.error || "下載失敗"); return null; });
       return r.blob();
@@ -200,11 +203,19 @@ function downloadCsv(id) {
       if (!blob) return;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `sys_${id}.csv`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(a.href);
     })
     .catch(() => alert("下載失敗：無法連線伺服器"));
+}
+
+function downloadCsv(id) {
+  downloadFile(`/api/admin/syslog/${encodeURIComponent(id)}`, `sys_${id}.csv`);
+}
+
+function downloadAlarmLog(id) {
+  downloadFile(`/api/admin/alarmlog/${encodeURIComponent(id)}`, `alarm_${id}.csv`);
 }
 
 // ── 帳號唯讀清單 ─────────────────────────────────────────────────

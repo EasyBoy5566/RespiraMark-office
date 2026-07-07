@@ -29,6 +29,8 @@ DEFAULTS = {
     "sys_log_dir": "sys_logs",
     # 秒，CSV 寫入節流間隔：只影響長期落地檔，不影響即時畫面/記憶體歷史（仍隨 Pi 送出頻率更新）
     "sys_csv_interval": 60.0,
+    # 警報出現/解除事件落地目錄（相對專案根目錄；空字串 = 不落地）
+    "alarm_log_dir": "alarm_logs",
     # ── TLS 加密（tools/make_certs.py 產生憑證；兩者皆填才啟用，網頁與 ingest 同時加密）──
     "tls_cert": "",           # 伺服器憑證，例如 "certs/server.pem"（相對專案根目錄）
     "tls_key": "",            # 伺服器私鑰，例如 "certs/server.key"

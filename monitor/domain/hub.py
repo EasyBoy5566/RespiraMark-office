@@ -17,6 +17,7 @@ import time
 from collections import deque
 
 from monitor.audit import audit
+from monitor.domain.alarm_log import AlarmLog
 
 PROTO_VERSION = 1
 
@@ -56,7 +57,8 @@ class DeviceState:
 class TelemetryHub:
     def __init__(self, offline_timeout: float = 5.0, max_devices: int = 16,
                  sys_history_max: int = 720, sys_log_dir: str = "",
-                 sys_csv_interval: float = 60.0, max_viewers: int = 50):
+                 sys_csv_interval: float = 60.0, max_viewers: int = 50,
+                 alarm_log_dir: str = ""):
         self.log = logging.getLogger("hub")
         self.offline_timeout = offline_timeout
         self.max_devices = max_devices
@@ -72,6 +74,7 @@ class TelemetryHub:
             except OSError as e:
                 self.log.warning(f"系統狀態 CSV 目錄無法建立，停用落地: {e}")
                 self.sys_log_dir = ""
+        self.alarm_log = AlarmLog(alarm_log_dir)   # 警報出現/解除事件落地（見 alarm_log.py）
         self.devices = {}          # device_id -> DeviceState
         self.viewers = set()       # 每個瀏覽器一個 asyncio.Queue
         self._seq = 0
@@ -120,6 +123,8 @@ class TelemetryHub:
             if t == "sys":
                 st.sys_history.append(msg)   # 記憶體歷史（趨勢圖）
                 self._append_sys_csv(st, msg)  # 長期落地（Excel 事後分析）
+            elif t == "alarm":
+                self.alarm_log.on_alarm(device, msg.get("alarms", []))  # 出現/解除事件落地
         elif t not in STREAM_TYPES:
             self.log.info(f"{device} 未知訊息類型（忽略）: {t}")
             return
@@ -157,6 +162,7 @@ class TelemetryHub:
             except OSError:
                 pass
         del self.devices[device]
+        self.alarm_log.forget(device)
         self.log.info(f"管理員移除離線裝置: {device}")
         audit("device_removed", device=device)
         self.broadcast({"type": "device_removed", "device": device})
@@ -167,6 +173,10 @@ class TelemetryHub:
         if not self.sys_log_dir:
             return None
         return os.path.join(self.sys_log_dir, f"sys_{_safe_name(device)}.csv")
+
+    def alarm_csv_path(self, device: str):
+        """該裝置警報歷史 CSV 的檔案路徑（供下載端點）；未啟用落地回傳 None"""
+        return self.alarm_log.csv_path(device)
 
     def _append_sys_csv(self, st: DeviceState, msg: dict):
         """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）。

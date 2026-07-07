@@ -88,6 +88,22 @@ async def admin_syslog(request):
     })
 
 
+async def admin_alarmlog(request):
+    """GET /api/admin/alarmlog/{device} → 下載該裝置的警報歷史 CSV（W-302）"""
+    hub = request.app["hub"]
+    device = request.match_info["device"]
+    path = hub.alarm_csv_path(device)
+    if not path or not os.path.exists(path):
+        raise web.HTTPNotFound(
+            text='{"error": "尚無 CSV 紀錄（未啟用落地或還沒發生過警報）"}',
+            content_type="application/json")
+    audit("admin_download_alarmlog", actor=_actor(request), device=device)
+    return web.FileResponse(path, headers={
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": f'attachment; filename="{os.path.basename(path)}"',
+    })
+
+
 # ── 登入未啟用（開發模式）時的替代 handler ──────────────────────────
 
 async def _login_disabled(request):
@@ -166,6 +182,7 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     app.router.add_get("/api/admin/accounts", admin_accounts)
     app.router.add_delete("/api/admin/devices/{device}", admin_remove_device)
     app.router.add_get("/api/admin/syslog/{device}", admin_syslog)
+    app.router.add_get("/api/admin/alarmlog/{device}", admin_alarmlog)
     if authmgr is not None:
         app.router.add_get("/login", authmgr.login_page)
         app.router.add_post("/login", authmgr.login_post)

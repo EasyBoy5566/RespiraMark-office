@@ -34,6 +34,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `GET /api/admin/accounts` | 帳號唯讀清單 `{"users":[{"username":...,"role":...}]}`（不含密碼雜湊；建立/刪除仍用 `tools/make_user.py`） |
 | `DELETE /api/admin/devices/{device}` | 移除**離線**裝置（清出儀表板版面；裝置重新連上會自動回來）。線上裝置回 409、未知裝置回 404 |
 | `GET /api/admin/syslog/{device}` | 下載該裝置的長期 sys CSV（`sys_<裝置>.csv`）；無檔案（未啟用落地或尚無資料）回 404 |
+| `GET /api/admin/alarmlog/{device}` | 下載該裝置的警報事件歷史 CSV（`alarm_<裝置>.csv`，欄位 `time,event,cp,code,prio,text`，`event` 為 `appeared`/`cleared`；只記機台編號與警報內容，不記病人代碼）；無檔案回 404 |
 
 ## 第一段：Pi → 伺服器（TCP，每行一個 JSON，`\n` 結尾）
 

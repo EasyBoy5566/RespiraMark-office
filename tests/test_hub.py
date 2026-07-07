@@ -14,7 +14,9 @@ conn_seq 連線世代、watchdog 逾時判離線、max_devices 上限、
 import asyncio
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 
@@ -190,6 +192,41 @@ class BroadcastTest(unittest.TestCase):
         msgs = drain(q)
         self.assertEqual(msgs[0]["i"], 5)           # 最舊的 5 則被丟掉
         self.assertEqual(msgs[-1]["i"], cap + 4)    # 最新的保住
+
+
+class AlarmLogWiringTest(unittest.TestCase):
+    """確認 Hub 真的有把 alarm 訊息接到 AlarmLog（邏輯本身測試見 test_alarm_log.py）"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="rm_hub_alarmlog_test_")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_alarm_message_reaches_alarm_log(self):
+        hub = TelemetryHub(alarm_log_dir=self.dir)
+        _, seq = hub.device_hello(hello_msg())
+        hub.device_message("pi-01", seq, {"type": "alarm", "alarms": [
+            {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}]})
+        path = hub.alarm_csv_path("pi-01")
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding="utf-8") as f:
+            self.assertIn("appeared", f.read())
+
+    def test_remove_device_forgets_active_alarms(self):
+        hub = TelemetryHub(alarm_log_dir=self.dir)
+        device, seq = hub.device_hello(hello_msg())
+        hub.device_message(device, seq, {"type": "alarm", "alarms": [
+            {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}]})
+        hub.device_disconnected(device, seq)
+        hub.remove_device(device)
+        # 裝置重新連上、同一顆警報再送一次 → 視為全新出現（而非「沒變化」被忽略）
+        device2, seq2 = hub.device_hello(hello_msg())
+        hub.device_message(device2, seq2, {"type": "alarm", "alarms": [
+            {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}]})
+        with open(hub.alarm_csv_path("pi-01"), encoding="utf-8") as f:
+            appeared_count = f.read().count("appeared")
+        self.assertEqual(appeared_count, 2)
 
 
 class SnapshotTest(unittest.TestCase):
