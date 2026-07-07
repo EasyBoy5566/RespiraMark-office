@@ -101,6 +101,26 @@ python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩
 | 醫院 Wi-Fi（筆電） | 改 server_host 為筆電院內 IP | 同一台，不用動 |
 | 醫院電腦 RT004 | 改 server_host 為 172.19.18.70 | 複製本資料夾過去、裝 Python + aiohttp、防火牆請資訊室協助放行 |
 
+## 正式伺服器維運工具（IMPROVEMENT_PLAN.md Phase 2）
+
+以下都是**給正式伺服器用**的腳本，開發用電腦不要執行。每支都支援先預覽（`-WhatIf`
+或 `-DryRun`）再正式套用，用法與細節見各腳本檔頭註解：
+
+| 腳本 | 用途 |
+|---|---|
+| `tools/setup_service.ps1` | 註冊 Windows 工作排程器：開機自動啟動＋失敗 1 分鐘內自動重啟，取代手動雙擊 `start_server.bat` |
+| `tools/lock_permissions.ps1` | 用 `icacls` 鎖定 accounts.json/devices.json/config.json/certs/logs 等敏感檔案，只留服務帳號與管理員可讀寫 |
+| `tools/backup.ps1` | 備份設定/帳號/裝置權杖/憑證/日誌成一個帶日期的 zip（**不含 `ca.key`**，那個要離線保存，見下）；建議排程每日執行 |
+
+**時間同步**：伺服器與每一台 Pi 都要跟院內同一個時間來源同步（NTP），否則警報/審計
+日誌的時間戳記不可信、事後回溯對不上。部署時請跟資訊室確認院內 NTP 伺服器位址，
+Windows 端用 `w32tm /query /status` 確認已同步，Pi 端用 `timedatectl` 確認。
+
+**ca.key（CA 發證私鑰）**：`tools/make_certs.py` 產生的 `certs/ca.key` 不應該長駐伺服器
+——簽完伺服器憑證後複製兩份到離線 USB，然後從伺服器上刪除；下次要重簽憑證（例如換
+IP）時再暫時取回，簽完立刻再次移除。被拿走等於能簽出任何受信任憑證，風險等同外洩
+CA 本身。
+
 ## 專案結構（目錄即架構，詳見 CLAUDE.md）
 
 | 路徑 | 用途 |

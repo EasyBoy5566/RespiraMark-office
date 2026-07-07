@@ -1,17 +1,20 @@
-# soak_monitor.ps1 - soak test resource monitor (dev tool, Windows only)
-# ========================================================================
-# Logs memory/CPU of all python processes to a CSV every 60 seconds,
-# for long-run stability (soak) testing. Open the CSV in Excel afterwards
-# and chart memory_MB over time.
+﻿# soak_monitor.ps1 — 長期資源監控（開發/驗收用，僅限 Windows；IMPROVEMENT_PLAN.md W-207/W-401）
+# ================================================================================
+# 每 60 秒把所有 python 程序的記憶體/CPU 記到一個 CSV，供長時間穩定性
+# （soak test）驗證用。事後用 Excel 打開，把 memory_MB 畫成折線圖看趨勢。
 #
-# Usage (from the respiramark-office folder):
+# 用法（在 respiramark-office 資料夾執行）：
 #   powershell -ExecutionPolicy Bypass -File tools\soak_monitor.ps1
-# Stop: Ctrl+C
+# 停止：Ctrl+C
 #
-# How to read the results:
-#   memory_MB rises then flattens  -> healthy
-#   memory_MB keeps climbing       -> memory leak
-#   cpu_total_sec is cumulative CPU seconds; +3 sec per minute ~= 5% CPU
+# 判讀標準：
+#   memory_MB 先上升後打平        → 正常（初期填快取/連線很正常）
+#   memory_MB 持續緩慢往上爬升，  → 需回報：對應 Phase 4 W-401「72 小時內
+#     累計 72 小時成長超過 5%       成長 <5%」的驗收標準；若確認是持續趨勢
+#                                    （非單次尖峰），視為疑似記憶體洩漏
+#   memory_MB 突然跳一大截後打平  → 通常是新裝置/新觀看端連入，正常現象，
+#                                    非趨勢性成長不用擔心
+#   cpu_total_sec 是累計 CPU 秒數；平均每分鐘 +3 秒 ≈ 5% CPU 使用率
 
 param(
     [int]$IntervalSec = 60,
