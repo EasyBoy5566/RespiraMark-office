@@ -35,7 +35,9 @@ DEFAULTS = {
     # ── 瀏覽器登入（tools/make_user.py 建帳號；停用僅限開發環境）──
     "auth_enabled": True,
     "accounts_file": "accounts.json",
-    "session_idle_minutes": 30.0,   # 閒置逾時自動登出；0 = 不逾時（護理站看板用）
+    "session_idle_minutes": 30.0,   # 閒置逾時（sliding）自動登出；0 = 不逾時（護理站看板用）
+    "session_absolute_hours": 12.0,  # 登入後最長可用時數，即使一直有操作也會過期；0 = 不限（看板帳號用）
+    "session_max": 200,        # session 總量上限，超過淘汰最久沒動作的一筆
 }
 
 

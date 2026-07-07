@@ -16,5 +16,7 @@
     "tls_key": "certs/server.key",
     "auth_enabled": true,
     "accounts_file": "accounts.json",
-    "session_idle_minutes": 30.0
+    "session_idle_minutes": 30.0,
+    "session_absolute_hours": 12.0,
+    "session_max": 200
 }

@@ -61,7 +61,9 @@ def build_auth_manager(cfg: dict, tls_on: bool):
         return None
     mgr = AuthManager(_resolve(str(cfg.get("accounts_file") or "accounts.json")),
                       idle_minutes=float(cfg.get("session_idle_minutes") or 0),
-                      secure_cookie=tls_on)
+                      secure_cookie=tls_on,
+                      absolute_hours=float(cfg.get("session_absolute_hours") or 0),
+                      max_sessions=int(cfg.get("session_max") or 200))
     if not mgr.has_users():
         log.warning("accounts.json 尚無任何帳號，目前無人能登入——"
                     "請先執行 python tools/make_user.py --user <帳號> --role admin")
@@ -145,12 +147,15 @@ async def main():
     web_runner = await start_web(hub, int(cfg["web_port"]),
                                  ssl_ctx=ssl_ctx, authmgr=authmgr)
     watchdog = asyncio.ensure_future(hub.watchdog())
+    auth_watchdog = asyncio.ensure_future(authmgr.watchdog()) if authmgr else None
 
     print_banner(cfg, tls_on=ssl_ctx is not None, auth_on=authmgr is not None)
     try:
         await asyncio.Event().wait()           # 永久運行，Ctrl+C 結束
     finally:
         watchdog.cancel()
+        if auth_watchdog:
+            auth_watchdog.cancel()
         ingest_server.close()
         await web_runner.cleanup()
 

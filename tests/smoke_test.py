@@ -33,6 +33,10 @@ HELLO_TIMEOUT = 3.0      # 測試用短逾時（正式環境預設 10 秒），�
 IDLE_TIMEOUT = 3.0       # 測試用短逾時（正式環境預設 60 秒）；fake_pi 持續送資料不受影響
 MAX_CONNS = 6            # 3 台 fake_pi 常駐 + 3 名額供本檔測試連線上限
 MAX_VIEWERS = 3          # 測試用小上限，加速驗證觀看端數量限制
+# WS 收集視窗秒數：必須 >= fake_pi 的 SYS_INTERVAL（5 秒），這樣不管前面
+# 幾個登入/PBKDF2 驗證花多久，都保證這個視窗至少會跨到一次週期性 sys
+# 廣播，不會因為累積延遲而剛好完全落在兩次 sys 之間（曾經因此誤判失敗）
+WS_COLLECT_SECONDS = 6.0
 ADMIN_USER = "smokeadmin"
 ADMIN_PASS = "SmokePass123"
 VIEWER_USER = "smokeview"
@@ -294,7 +298,7 @@ async def run_checks():
     # 剛好跨過切換點導致誤判失敗（曾經因此觸發過一次假警報）。
 
     await asyncio.sleep(2.0)          # 讓 fake_pi 連上並開始送資料
-    msgs = await collect_ws(authed, 4.0)
+    msgs = await collect_ws(authed, WS_COLLECT_SECONDS)
 
     check("WS 有收到訊息", len(msgs) > 10, f"共 {len(msgs)} 則")
     check("第一則是 snapshot", bool(msgs) and msgs[0]["type"] == "snapshot")
@@ -325,8 +329,8 @@ async def run_checks():
         check("wave 欄位齊全且等長",
               n > 0 and len(w["f"]) == n and len(w["v"]) == n and "trig" in w)
         total = sum(len(m["p"]) for m in waves if m["device"] == "smoke-01")
-        check("波形速率合理（80~120Hz）", 80 <= total / 4.0 <= 120,
-              f"{total / 4.0:.0f} 樣本/秒")
+        rate = total / WS_COLLECT_SECONDS
+        check("波形速率合理（80~120Hz）", 80 <= rate <= 120, f"{rate:.0f} 樣本/秒")
 
     check("觀看端數達上限，新連線被拒（503）", await check_max_viewers(authed))
 

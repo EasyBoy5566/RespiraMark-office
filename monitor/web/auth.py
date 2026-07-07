@@ -15,6 +15,7 @@
 - 純標準庫 + aiohttp（遵守 CLAUDE.md §2.3 相依規則）
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -38,9 +39,13 @@ ADMIN_API_PREFIX = "/api/admin/"
 # 未登入時導向登入頁（而非 401 JSON）的「頁面」路徑
 PAGE_PATHS = {"/", "/admin"}
 
-# 登入失敗鎖定：同一 IP 在視窗內失敗達上限 → 拒絕直到視窗滑出
+# 登入失敗鎖定：同一(IP,帳號)在視窗內失敗達上限 → 拒絕直到視窗滑出。
+# 另外用同一 IP 對「任意帳號」的失敗總數設較高上限，擋住同一來源對
+# 多個帳號亂猜的情境；只鎖單一(IP,帳號)則不會誤傷共用同一台電腦/
+# 出口 IP 的其他使用者嘗試登入自己的帳號（F-08）。
 FAIL_WINDOW = 600.0     # 秒
-FAIL_MAX = 5
+FAIL_MAX = 5            # 同一 (IP, 帳號) 上限
+FAIL_MAX_IP = 20        # 同一 IP 對任意帳號的總上限
 
 
 # 帳號不存在時也跑一次雜湊比對：讓「帳號存在與否」在回應時間上無差異
@@ -93,16 +98,28 @@ class LocalAuthenticator:
 
 
 class SessionStore:
-    """伺服器端 session（記憶體）；sliding 閒置逾時"""
+    """伺服器端 session（記憶體）；sliding 閒置逾時 + 選用絕對逾時 + 總量上限。
 
-    def __init__(self, idle_minutes: float = 30.0):
+    絕對逾時（absolute_hours）與閒置逾時（idle）是兩件事：閒置逾時只要一直
+    有人在用就永遠不會觸發（sliding），絕對逾時則是「登入後最多能撐多久」
+    的硬上限，即使一直有操作也一樣會過期，逼迫重新輸入密碼。兩者皆
+    0 = 不逾時（護理站看板帳號用）。
+    """
+
+    def __init__(self, idle_minutes: float = 30.0, absolute_hours: float = 0.0,
+                 max_sessions: int = 200):
         self.idle = float(idle_minutes) * 60.0
-        self._sessions = {}     # token -> {"username","role","last"}
+        self.absolute = float(absolute_hours) * 3600.0
+        self.max_sessions = max_sessions
+        self._sessions = {}     # token -> {"username","role","last","created"}
 
     def create(self, username: str, role: str) -> str:
         token = secrets.token_urlsafe(32)
+        now = time.time()
         self._sessions[token] = {"username": username, "role": role,
-                                 "last": time.time()}
+                                 "last": now, "created": now}
+        if len(self._sessions) > self.max_sessions:
+            self._evict_oldest()
         return token
 
     def get(self, token):
@@ -116,42 +133,87 @@ class SessionStore:
         if self.idle > 0 and now - s["last"] > self.idle:
             del self._sessions[token]
             return None
+        if self.absolute > 0 and now - s["created"] > self.absolute:
+            del self._sessions[token]
+            return None
         s["last"] = now
         return s
 
     def delete(self, token):
         self._sessions.pop(token, None)
 
+    def _evict_oldest(self):
+        """超過 max_sessions 時淘汰最久沒動作的一筆（長年運行防止無限增長，F-09）"""
+        oldest = min(self._sessions, key=lambda t: self._sessions[t]["last"])
+        del self._sessions[oldest]
+
+    def sweep(self) -> int:
+        """清掉所有已過期 session（idle 或 absolute）；回傳清掉的筆數。
+        由 AuthManager.watchdog() 定期呼叫——get() 只在被存取時才會發現
+        過期，長年沒人用舊 cookie 存取的殘留項目要靠這個主動清掉。"""
+        now = time.time()
+        expired = [t for t, s in self._sessions.items()
+                  if (self.idle > 0 and now - s["last"] > self.idle)
+                  or (self.absolute > 0 and now - s["created"] > self.absolute)]
+        for t in expired:
+            del self._sessions[t]
+        return len(expired)
+
 
 class LoginRateLimiter:
-    """同一 IP 連續失敗達 FAIL_MAX 次（FAIL_WINDOW 內）→ 暫時拒絕"""
+    """雙鍵計數：同一 (IP,帳號) 達 FAIL_MAX，或同一 IP 對任意帳號累計達
+    FAIL_MAX_IP（FAIL_WINDOW 內）→ 暫時拒絕（見上方常數註解，F-08）。"""
 
     def __init__(self):
-        self._fails = {}        # ip -> [失敗時間...]
+        self._by_pair = {}      # (ip,username) -> [失敗時間...]
+        self._by_ip = {}        # ip -> [失敗時間...]
 
-    def blocked(self, ip: str) -> bool:
+    @staticmethod
+    def _recent(times: list, now: float) -> list:
+        return [t for t in times if now - t < FAIL_WINDOW]
+
+    def blocked(self, ip: str, username: str) -> bool:
         now = time.time()
-        recent = [t for t in self._fails.get(ip, []) if now - t < FAIL_WINDOW]
-        self._fails[ip] = recent
-        return len(recent) >= FAIL_MAX
+        pair_recent = self._recent(self._by_pair.get((ip, username), []), now)
+        ip_recent = self._recent(self._by_ip.get(ip, []), now)
+        self._by_pair[(ip, username)] = pair_recent
+        self._by_ip[ip] = ip_recent
+        return len(pair_recent) >= FAIL_MAX or len(ip_recent) >= FAIL_MAX_IP
 
-    def fail(self, ip: str):
-        self._fails.setdefault(ip, []).append(time.time())
+    def fail(self, ip: str, username: str):
+        now = time.time()
+        self._by_pair.setdefault((ip, username), []).append(now)
+        self._by_ip.setdefault(ip, []).append(now)
 
-    def clear(self, ip: str):
-        self._fails.pop(ip, None)
+    def clear(self, ip: str, username: str):
+        self._by_pair.pop((ip, username), None)
+        # 注意：不清 _by_ip——這是「同 IP 對多帳號亂猜」的總量防護，
+        # 某一帳號登入成功不代表這個 IP 沒有在對其他帳號嘗試
+
+
+SWEEP_INTERVAL = 300.0     # 秒，session 定期清掃間隔（F-09：長年運行防止殘留累積）
 
 
 class AuthManager:
     """登入功能的組裝：驗證器 + session + 限流 + HTTP handler"""
 
     def __init__(self, accounts_path: str, idle_minutes: float = 30.0,
-                 secure_cookie: bool = False):
+                 secure_cookie: bool = False, absolute_hours: float = 0.0,
+                 max_sessions: int = 200):
         self.log = logging.getLogger("auth")
         self.authenticator = LocalAuthenticator(accounts_path)
-        self.sessions = SessionStore(idle_minutes)
+        self.sessions = SessionStore(idle_minutes, absolute_hours, max_sessions)
         self.limiter = LoginRateLimiter()
         self.secure_cookie = secure_cookie   # TLS 啟用時 cookie 加 Secure 旗標
+
+    async def watchdog(self):
+        """定期清掃過期 session（比照 hub.watchdog() 的既有模式）；
+        main.py 用 asyncio.ensure_future 啟動，與 hub 的 watchdog 並存"""
+        while True:
+            await asyncio.sleep(SWEEP_INTERVAL)
+            n = self.sessions.sweep()
+            if n:
+                self.log.info(f"清掃過期 session {n} 筆")
 
     def has_users(self) -> bool:
         return self.authenticator.has_users()
@@ -172,15 +234,15 @@ class AuthManager:
         username = str(form.get("username") or "").strip()
         password = str(form.get("password") or "")
         ip = request.remote or "?"
-        if self.limiter.blocked(ip):
+        if self.limiter.blocked(ip, username):
             self.log.warning(f"登入嘗試被鎖定（{ip} 失敗次數過多）")
             raise web.HTTPSeeOther("/login?err=lock")
         role = self.authenticator.authenticate(username, password)
         if role is None:
-            self.limiter.fail(ip)
+            self.limiter.fail(ip, username)
             self.log.warning(f"登入失敗（{ip}）")     # 不記帳號名，避免洩漏嘗試內容
             raise web.HTTPSeeOther("/login?err=1")
-        self.limiter.clear(ip)
+        self.limiter.clear(ip, username)
         token = self.sessions.create(username, role)
         self.log.info(f"登入成功: {username}（{role}）")
         resp = web.HTTPSeeOther("/")
