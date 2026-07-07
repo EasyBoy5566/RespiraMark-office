@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import hmac
 import json
 import logging
 
@@ -44,7 +45,8 @@ async def handle_ingest(reader, writer, hub, token=""):
                     log.warning(f"{peer} 第一則訊息不是 hello，斷線")
                     break
                 # token 驗證（見 PROTOCOL.md）；注意：token 值不得寫入 log
-                if token and msg.get("token") != token:
+                # 用常數時間比對，避免用回應時間差猜出正確 token（timing attack）
+                if token and not hmac.compare_digest(str(msg.get("token") or ""), token):
                     log.warning(f"{peer} token 驗證失敗，斷線")
                     break
                 accepted = hub.device_hello(msg)
