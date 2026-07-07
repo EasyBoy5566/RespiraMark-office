@@ -276,6 +276,15 @@ async def run_checks():
               me.get("username") == ADMIN_USER and me.get("role") == "admin",
               str(me))
 
+    # ── /ws Origin 檢查（IMPROVEMENT_PLAN.md W-106）─────────────────
+    try:
+        bad_ws = await authed.ws_connect(f"{BASE}/ws",
+                                         headers={"Origin": "https://evil.example"})
+        await bad_ws.close()
+        check("偽造 Origin 的 /ws 被拒", False)
+    except aiohttp.WSServerHandshakeError as e:
+        check("偽造 Origin 的 /ws 被拒", e.status == 403, f"status={e.status}")
+
     # ── ingest token（走 TLS）───────────────────────────────────────
     check("錯誤 token 被伺服器斷線", await check_bad_token())
 

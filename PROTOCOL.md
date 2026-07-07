@@ -94,7 +94,7 @@ Pi 端在遙測背景執行緒每 ~5s 取樣一次（純標準庫讀 `/proc`、`
 
 ## 第二段：伺服器 → 瀏覽器（WebSocket `/ws`，每則一個 JSON）
 
-同時觀看端（WebSocket 連線）數超過 `max_viewers`（預設 50）時，新連線回 HTTP 503 拒絕。
+請求帶 `Origin` 標頭且與本站不同（跨站 WebSocket 挾持）時回 HTTP 403 拒絕；沒有 `Origin` 標頭則放行（相容非瀏覽器客戶端）。同時觀看端（WebSocket 連線）數超過 `max_viewers`（預設 50）時，新連線回 HTTP 503 拒絕。
 
 Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另外產生三種：
 

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+from urllib.parse import urlparse
 
 from aiohttp import web, WSMsgType
 
@@ -82,7 +83,20 @@ async def sys_history(request):
     return web.json_response({"device": device, "samples": hub.sys_history(device)})
 
 
+def _origin_allowed(request) -> bool:
+    """Origin 存在且 host 與本站不同 → 擋（跨站 WebSocket 挾持）；
+    不存在則放行（相容非瀏覽器客戶端，例如既有測試工具與未來可能的
+    命令列查看端）——SameSite=Lax cookie 已是第一層防護，這是第二層。"""
+    origin = request.headers.get("Origin")
+    if not origin:
+        return True
+    return urlparse(origin).netloc == request.host
+
+
 async def ws_handler(request):
+    if not _origin_allowed(request):
+        raise web.HTTPForbidden(
+            text='{"error": "Origin 不符"}', content_type="application/json")
     hub = request.app["hub"]
     q = hub.add_viewer()
     if q is None:
