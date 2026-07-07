@@ -26,7 +26,8 @@ class _ConnCounter:
 
 
 async def handle_ingest(reader, writer, hub, token="", max_conns=64,
-                         hello_timeout=10.0, idle_timeout=60.0, counter=None):
+                         hello_timeout=10.0, idle_timeout=60.0, counter=None,
+                         devices=None):
     """單一 Pi 連線的生命週期：hello（含 token 驗證）→ 持續收訊息 → 斷線通知 Hub。
 
     連線防護（IMPROVEMENT_PLAN.md F-02）：同時連線數超過 max_conns 直接拒絕；
@@ -73,9 +74,17 @@ async def handle_ingest(reader, writer, hub, token="", max_conns=64,
                 if msg.get("type") != "hello":
                     log.warning(f"{peer} 第一則訊息不是 hello，斷線")
                     break
-                # token 驗證（見 PROTOCOL.md）；注意：token 值不得寫入 log
+                # 存取驗證（見 PROTOCOL.md）；注意：token 值不得寫入 log。
+                # devices.json 存在 → 每台裝置獨立 token（IMPROVEMENT_PLAN.md F-01）；
+                # 否則退回舊版單一 ingest_token（向後相容）。兩種模式失敗都用同一句
+                # log，不透露是裝置不存在、被停用、還是 token 錯誤。
+                dev_token = str(msg.get("token") or "")
+                if devices is not None and devices.exists():
+                    if not devices.verify(str(msg.get("device") or ""), dev_token):
+                        log.warning(f"{peer} 裝置權杖驗證失敗，斷線")
+                        break
                 # 用常數時間比對，避免用回應時間差猜出正確 token（timing attack）
-                if token and not hmac.compare_digest(str(msg.get("token") or ""), token):
+                elif token and not hmac.compare_digest(dev_token, token):
                     log.warning(f"{peer} token 驗證失敗，斷線")
                     break
                 accepted = hub.device_hello(msg)
@@ -139,12 +148,13 @@ def _valid_message(msg: dict) -> bool:
 
 async def start_ingest(hub, port: int, token: str = "", ssl_ctx=None,
                         max_conns: int = 64, hello_timeout: float = 10.0,
-                        idle_timeout: float = 60.0):
-    """啟動 TCP 接收伺服器；token 非空時對所有連線做 hello 驗證；
-    ssl_ctx 非 None 時整條連線走 TLS（Pi 端需以 tls_ca 信任本伺服器的 CA）"""
+                        idle_timeout: float = 60.0, devices=None):
+    """啟動 TCP 接收伺服器；devices（DeviceRegistry）存在時優先驗證每台裝置
+    獨立 token，否則退回 token 單一共用比對；ssl_ctx 非 None 時整條連線走
+    TLS（Pi 端需以 tls_ca 信任本伺服器的 CA）"""
     counter = _ConnCounter()
     return await asyncio.start_server(
         lambda r, w: handle_ingest(r, w, hub, token, max_conns, hello_timeout,
-                                   idle_timeout, counter),
+                                   idle_timeout, counter, devices),
         "0.0.0.0", port, limit=READ_LIMIT, ssl=ssl_ctx,
     )

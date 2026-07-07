@@ -6,7 +6,7 @@ RespiraMark Office — 中央監視儀表板 進入點
 
 啟動：python main.py（或雙擊 start_server.bat）
 設定：config.json（不存在則用預設值，範本見 config.json.example）
-憑證：python tools/make_certs.py；帳號：python tools/make_user.py
+憑證：python tools/make_certs.py；帳號：python tools/make_user.py；裝置權杖：python tools/make_device.py
 
 本檔是 composition root——唯一同時 import 三層並組裝的地方：
     transport(ingest) ──▶ domain(hub) ◀── web(routes)
@@ -22,6 +22,7 @@ import sys
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.hub import TelemetryHub
+from monitor.transport.device_auth import DeviceRegistry
 from monitor.transport.ingest import start_ingest
 from monitor.web.auth import AuthManager
 from monitor.web.routes import start_web
@@ -117,6 +118,16 @@ async def main():
     ssl_ctx = build_ssl_context(cfg)
     authmgr = build_auth_manager(cfg, tls_on=ssl_ctx is not None)
 
+    # 裝置權杖：devices.json 存在則每台獨立驗證，否則退回單一 ingest_token（向後相容）
+    devices = DeviceRegistry(_resolve(str(cfg.get("devices_file") or "devices.json")))
+    log = logging.getLogger("main")
+    if devices.exists():
+        log.info(f"裝置權杖模式：每台獨立（devices.json，共 {len(devices.list_devices())} 台）")
+    elif cfg.get("ingest_token"):
+        log.info("裝置權杖模式：單一共用 ingest_token（建議改用 tools/make_device.py 逐台核發）")
+    else:
+        log.warning("裝置權杖模式：未設定（僅限開發環境，任何裝置皆可連入）")
+
     # 組裝三層
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
                        max_devices=int(cfg["max_devices"]),
@@ -129,7 +140,8 @@ async def main():
                                        ssl_ctx=ssl_ctx,
                                        max_conns=int(cfg["ingest_max_conns"]),
                                        hello_timeout=float(cfg["ingest_hello_timeout"]),
-                                       idle_timeout=float(cfg["ingest_idle_timeout"]))
+                                       idle_timeout=float(cfg["ingest_idle_timeout"]),
+                                       devices=devices)
     web_runner = await start_web(hub, int(cfg["web_port"]),
                                  ssl_ctx=ssl_ctx, authmgr=authmgr)
     watchdog = asyncio.ensure_future(hub.watchdog())

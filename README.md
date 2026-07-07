@@ -66,8 +66,23 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `ingest_port` | 8765 | Pi 連入的 TCP port |
 | `web_port` | 8080 | 瀏覽器網頁 port |
 | `offline_timeout` | 5.0 | 幾秒沒資料判定 Pi 離線 |
-| `ingest_token` | （空） | Pi 連入的存取權杖；設定後 Pi 端 telemetry.json 的 `token` 必須一致才能連入。空字串 = 不驗證（僅限開發環境，**部署前務必設定**） |
+| `ingest_token` | （空） | 單一共用存取權杖（`devices.json` 不存在時的退回模式）；設定後 Pi 端 telemetry.json 的 `token` 必須一致才能連入。空字串 = 不驗證（僅限開發環境，**部署前務必設定**） |
+| `devices_file` | `devices.json` | 每台裝置獨立權杖檔（`tools/make_device.py` 建立，見下）；存在時優先於 `ingest_token`，**建議部署醫院前改用此模式** |
 | `max_devices` | 16 | 裝置數上限，超過即拒絕新裝置 |
+| `ingest_max_conns` | 64 | 同時 TCP 連線數上限，超過拒絕新連線 |
+| `ingest_hello_timeout` | 10.0 | 連線後幾秒沒收到合法 hello 就斷線 |
+| `ingest_idle_timeout` | 60.0 | hello 通過後幾秒沒資料就斷線（Pi 每 2 秒 ping，留有餘裕） |
+| `max_viewers` | 50 | 同時瀏覽器觀看端數上限，超過拒絕新連線（503） |
+
+### 每台 Pi 獨立存取權杖（建議部署醫院前改用）
+
+```bash
+python tools/make_device.py --device pi-icu-01 --note "ICU 3床"   # 產生新 token（只顯示一次）
+python tools/make_device.py --list                                # 列出裝置（不顯示 token）
+python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩時先停用
+```
+
+把顯示的 token 複製到該台 Pi 的 `telemetry.json` 的 `token` 欄位。`devices.json` 一旦存在，伺服器就改用這個模式；外洩或懷疑外洩時只需停用/換發該台，不影響其他 Pi（範本見 `devices.json.example`）。
 
 ## 換環境部署（家裡 → 醫院）
 

@@ -7,7 +7,7 @@ make_user — 建立/管理儀表板登入帳號（寫入 accounts.json）
     python tools/make_user.py --list                           # 列出帳號
     python tools/make_user.py --delete --user nurse01          # 刪除帳號
 
-- 密碼只存 PBKDF2 雜湊（見 monitor/web/auth.py），檔案裡沒有明碼。
+- 密碼只存 PBKDF2 雜湊（見 monitor/crypto.py），檔案裡沒有明碼。
 - accounts.json 不進 git（每台伺服器各自維護）；改動後不用重啟伺服器，
   下一次登入就會讀到新內容。
 - 角色：viewer = 只看儀表板；admin = 之後的管理頁也能進。

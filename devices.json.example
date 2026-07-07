@@ -1,0 +1,11 @@
+{
+  "_說明": "每台 Pi 獨立存取權杖的範本。實際的 devices.json 不進 git，請用 tools/make_device.py 建立（token 只存 PBKDF2 雜湊，不存明碼）。此檔不存在時，伺服器退回舊版單一 ingest_token 模式（見 config.json 的 ingest_token）。",
+  "devices": [
+    {
+      "device_id": "pi-icu-01",
+      "note": "ICU 3床（由 make_device.py 產生，勿手填 token_hash）",
+      "enabled": true,
+      "token_hash": "pbkdf2_sha256$200000$<salt-hex>$<hash-hex>"
+    }
+  ]
+}
