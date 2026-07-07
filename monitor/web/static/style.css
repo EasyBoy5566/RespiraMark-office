@@ -340,12 +340,45 @@ main#grid {
 .login-btn:hover { background: var(--blue-hover); }
 .login-err { margin-top: 14px; color: var(--red); font-size: 13px; }
 
-/* 改密碼小視窗（重用 .overlay 當背景遮罩＋ .login-card 當卡片樣式，見 auth.js） */
-#pwModal { display: flex; align-items: center; justify-content: center; }
-#pwCancel { width: 100%; margin-top: 10px; }
-
-/* Header 登入者顯示 */
-.who { color: var(--text-secondary); font-size: 14px; }
+/* 帳號選單（點右上角帳號名稱展開，見 auth.js）：
+ * 深淺色切換／離線提示音／設備管理／登出等動作類按鈕收在這裡，取代一整排按鈕 */
+.user-menu-wrap { position: relative; }
+.who-btn {
+  font-size: 14px;
+  color: var(--text-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.who-btn:hover { background: var(--hover); color: var(--text-primary); }
+.user-menu {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  min-width: 190px;
+  display: flex; flex-direction: column;
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  padding: 6px;
+  gap: 2px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 30;
+}
+.user-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.user-menu-item:hover { background: var(--hover); color: var(--text-primary); }
 
 /* ── 管理頁（/admin）────────────────────────────────────── */
 .admin-main {

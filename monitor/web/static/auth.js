@@ -1,23 +1,19 @@
-/* 登入狀態顯示、登出、自助改密碼 — 共用模組（分工規範見 CLAUDE.md §5）
+/* 登入狀態顯示、登出、帳號選單 — 共用模組（分工規範見 CLAUDE.md §5）
  * 儀表板（index.html）與管理頁（admin.html）共用：
  * - 顯示登入者帳號、登出按鈕（登入未啟用時 /api/me 回 auth:false → 皆隱藏）
  * - #adminLink（只有儀表板有）僅 admin 角色顯示
- * - 自助改密碼（IMPROVEMENT_PLAN.md W-303）：#pwBtn 開啟 #pwModal，
- *   POST /api/password（驗舊密碼＋新密碼 ≥8 碼）；兩頁都要有同一組 DOM
+ * - 帳號選單：點 #who 開關 #userMenu 下拉選單（深淺色切換、離線提示音、
+ *   設備管理、登出等「動作類」按鈕都收在裡面，見 index.html/admin.html
+ *   的 header 結構；主題/離線提示音的實際切換邏輯仍在 app.js/admin.js，
+ *   這裡只負責選單本身的開關）
  * 全域命名空間：RMAuth；RMAuth.me 是 /api/me 的 Promise（admin.js 用來確認角色） */
 "use strict";
 
 const RMAuth = (() => {
-  const whoEl = document.getElementById("who");
+  const whoBtn = document.getElementById("who");
+  const userMenu = document.getElementById("userMenu");
   const logoutBtn = document.getElementById("logoutBtn");
   const adminLink = document.getElementById("adminLink");   // 管理頁沒有此元素
-  const pwBtn = document.getElementById("pwBtn");
-  const pwModal = document.getElementById("pwModal");
-  const pwOld = document.getElementById("pwOld");
-  const pwNew = document.getElementById("pwNew");
-  const pwSubmit = document.getElementById("pwSubmit");
-  const pwCancel = document.getElementById("pwCancel");
-  const pwErr = document.getElementById("pwErr");
 
   const me = fetch("/api/me")
     .then((r) => (r.ok ? r.json() : null))
@@ -25,9 +21,10 @@ const RMAuth = (() => {
 
   me.then((m) => {
     if (m && m.username) {
-      whoEl.textContent = `帳號 ${m.username}`;
+      whoBtn.textContent = `帳號 ${m.username} ▾`;
       logoutBtn.classList.remove("hidden");
-      if (pwBtn) pwBtn.classList.remove("hidden");
+    } else {
+      whoBtn.textContent = "選單 ▾";
     }
     if (adminLink && m && m.role === "admin") adminLink.classList.remove("hidden");
   });
@@ -37,41 +34,17 @@ const RMAuth = (() => {
       .then(() => { location.href = "/login"; })
       .catch(() => { location.href = "/login"; }));
 
-  // ── 自助改密碼 ───────────────────────────────────────────────────
-  function openPwModal() {
-    pwOld.value = ""; pwNew.value = "";
-    pwErr.classList.add("hidden");
-    pwModal.classList.remove("hidden");
-    pwOld.focus();
-  }
-  function closePwModal() { pwModal.classList.add("hidden"); }
-
-  function showPwErr(msg) {
-    pwErr.textContent = msg;
-    pwErr.classList.remove("hidden");
-  }
-
-  function submitPw() {
-    if (pwNew.value.length < 8) { showPwErr("新密碼至少 8 個字元"); return; }
-    const body = new URLSearchParams({ old_password: pwOld.value, new_password: pwNew.value });
-    fetch("/api/password", { method: "POST", body })
-      .then(async (r) => {
-        if (r.ok) {
-          closePwModal();
-          alert("密碼已更新，下次登入請用新密碼。");
-          return;
-        }
-        const j = await r.json().catch(() => ({}));
-        showPwErr(j.error || "修改失敗");
-      })
-      .catch(() => showPwErr("修改失敗：無法連線伺服器"));
-  }
-
-  if (pwBtn) {
-    pwBtn.addEventListener("click", openPwModal);
-    pwCancel.addEventListener("click", closePwModal);
-    pwSubmit.addEventListener("click", submitPw);
-  }
+  // ── 帳號選單開關 ─────────────────────────────────────────────────
+  whoBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    userMenu.classList.toggle("hidden");
+  });
+  document.addEventListener("click", (e) => {
+    if (!userMenu.classList.contains("hidden")
+        && !userMenu.contains(e.target) && e.target !== whoBtn) {
+      userMenu.classList.add("hidden");
+    }
+  });
 
   return { me };
 })();

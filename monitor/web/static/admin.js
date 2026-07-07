@@ -221,21 +221,6 @@ function downloadAlarmLog(id) {
 // ── 帳號唯讀清單 ─────────────────────────────────────────────────
 const ROLE_LABEL = { admin: "管理員", viewer: "檢視（看板）" };
 
-function resetPassword(username) {
-  if (!confirm(`確定重設「${username}」的密碼？\n（會產生新的一次性密碼，原密碼立刻失效）`)) return;
-  fetch(`/api/admin/reset-password/${encodeURIComponent(username)}`, { method: "POST" })
-    .then(async (r) => {
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        alert(j.error || "重設失敗");
-        return;
-      }
-      const j = await r.json();
-      alert(`已重設「${username}」的密碼（只顯示這一次，請立刻告知本人）：\n\n${j.new_password}`);
-    })
-    .catch(() => alert("重設失敗：無法連線伺服器"));
-}
-
 fetch("/api/admin/accounts")
   .then((r) => (r.ok ? r.json() : null))
   .then((data) => {
@@ -246,17 +231,11 @@ fetch("/api/admin/accounts")
       const tr = tb.insertRow();
       tr.insertCell().textContent = u.username;
       tr.insertCell().textContent = ROLE_LABEL[u.role] || u.role;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "admin-btn";
-      btn.textContent = "重設密碼";
-      btn.addEventListener("click", () => resetPassword(u.username));
-      tr.insertCell().appendChild(btn);
     }
     if (!users.length) {
       const tr = tb.insertRow();
       const td = tr.insertCell();
-      td.colSpan = 3;
+      td.colSpan = 2;
       td.textContent = "（無帳號，或登入功能未啟用）";
     }
   })
