@@ -14,7 +14,8 @@ import hashlib
 import hmac
 import secrets
 
-PBKDF2_ITERATIONS = 200_000
+PBKDF2_ITERATIONS = 600_000   # OWASP 2023 建議值（原 200_000）；雜湊字串自帶迭代數，
+                              # verify_password 用字串內的值比對，舊帳號/舊裝置 token 不受影響
 
 
 def hash_password(password: str) -> str:
