@@ -41,6 +41,12 @@ DEFAULTS = {
     "session_absolute_hours": 12.0,  # 登入後最長可用時數，即使一直有操作也會過期；0 = 不限（看板帳號用）
     "session_max": 200,        # session 總量上限，超過淘汰最久沒動作的一筆
     "log_dir": "logs",         # 審計日誌落地目錄（logs/audit.log，10MB x 5 輪替）
+    # ── 帳密驗證來源（W-307；local=本機 accounts.json，ldap=院內 LDAP/AD）──
+    "auth_backend": "local",
+    "ldap_server": "",             # 例如 "ldaps://ad.csh.org.tw"（含 scheme；用 ldaps:// 走加密）
+    "ldap_bind_template": "{username}@example.com",  # 帳號套進這個樣板直接當 bind DN，例如 UPN 格式
+    "ldap_use_ssl": True,
+    "ldap_timeout": 5.0,           # 秒，LDAP 連線/驗證逾時
 }
 
 

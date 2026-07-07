@@ -2,3 +2,7 @@
 
 # 僅 tools/make_certs.py（產 TLS 憑證）需要；伺服器運行本體不使用
 cryptography==46.0.5
+
+# 僅 auth_backend 設為 "ldap"（院內 LDAP/AD 帳密驗證，W-307）時需要；
+# 預設 auth_backend="local" 不會用到，可以不裝
+ldap3==2.9.1

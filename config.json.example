@@ -20,5 +20,10 @@
     "session_idle_minutes": 30.0,
     "session_absolute_hours": 12.0,
     "session_max": 200,
-    "log_dir": "logs"
+    "log_dir": "logs",
+    "auth_backend": "local",
+    "ldap_server": "ldaps://ad.example.org",
+    "ldap_bind_template": "{username}@example.org",
+    "ldap_use_ssl": true,
+    "ldap_timeout": 5.0
 }

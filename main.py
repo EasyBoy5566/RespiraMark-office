@@ -25,7 +25,8 @@ from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.hub import TelemetryHub
 from monitor.transport.device_auth import DeviceRegistry
 from monitor.transport.ingest import start_ingest
-from monitor.web.auth import AuthManager
+from monitor.web.auth import AuthManager, LocalAuthenticator
+from monitor.web.ldap_auth import LdapAuthenticator
 from monitor.web.routes import start_web
 
 
@@ -54,20 +55,38 @@ def build_ssl_context(cfg: dict):
     return ctx
 
 
+def build_authenticator(cfg: dict):
+    """依 auth_backend 建立驗證器（local=預設／ldap=院內 LDAP/AD，見 W-307）"""
+    backend = str(cfg.get("auth_backend") or "local").lower()
+    if backend == "ldap":
+        return LdapAuthenticator(
+            server_uri=str(cfg.get("ldap_server") or ""),
+            bind_template=str(cfg.get("ldap_bind_template") or "{username}"),
+            roles_path=_resolve(str(cfg.get("accounts_file") or "accounts.json")),
+            use_ssl=bool(cfg.get("ldap_use_ssl", True)),
+            timeout=float(cfg.get("ldap_timeout") or 5.0))
+    return LocalAuthenticator(_resolve(str(cfg.get("accounts_file") or "accounts.json")))
+
+
 def build_auth_manager(cfg: dict, tls_on: bool):
     """依設定建立登入管理器；auth_enabled=false 回傳 None（僅限開發）"""
     log = logging.getLogger("main")
     if not cfg.get("auth_enabled"):
         log.warning("登入驗證未啟用（auth_enabled=false）——僅限開發環境使用")
         return None
-    mgr = AuthManager(_resolve(str(cfg.get("accounts_file") or "accounts.json")),
+    authenticator = build_authenticator(cfg)
+    mgr = AuthManager(authenticator,
                       idle_minutes=float(cfg.get("session_idle_minutes") or 0),
                       secure_cookie=tls_on,
                       absolute_hours=float(cfg.get("session_absolute_hours") or 0),
                       max_sessions=int(cfg.get("session_max") or 200))
     if not mgr.has_users():
-        log.warning("accounts.json 尚無任何帳號，目前無人能登入——"
-                    "請先執行 python tools/make_user.py --user <帳號> --role admin")
+        backend = str(cfg.get("auth_backend") or "local").lower()
+        hint = ("請先執行 python tools/make_user.py --user <帳號> --role admin"
+               if backend != "ldap" else
+               "請先在 accounts.json 加入至少一筆 {\"username\":...,\"role\":...}"
+               "（LDAP 模式不需要 password 欄位，帳密驗證交給 LDAP）")
+        log.warning(f"帳號/角色名單尚無任何項目，目前無人能登入——{hint}")
     return mgr
 
 

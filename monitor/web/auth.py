@@ -5,14 +5,18 @@
 （Pi 資料連入的驗證是 ingest_token + TLS，與本模組無關。）
 
 設計：
-- 密碼只存 PBKDF2-SHA256 雜湊（accounts.json，不進 git；tools/make_user.py 建立）
+- 密碼只存 PBKDF2-SHA256 雜湊（accounts.json，不進 git；tools/make_user.py 建立）；
+  本應用**不提供改密碼功能**——密碼由 tools/make_user.py（本機模式）或院內
+  HIS/AD（LDAP 模式，見 monitor/web/ldap_auth.py）管理，改了立刻生效
 - session 存伺服器記憶體：cookie 只是隨機權杖，本身不含任何資訊；
   閒置逾時（sliding）由 SessionStore 判斷，0 = 不逾時（護理站看板用）
-- 「驗證帳密」隔離成 Authenticator 介面：日後接醫院 AD/LDAP 時，
-  只需新增一個實作（authenticate(username, password) -> role | None），
-  登入頁、session、middleware 全部不用改
+- 「驗證帳密」隔離成 Authenticator 介面：AuthManager 用依賴注入接收
+  authenticator（LocalAuthenticator 或 LdapAuthenticator），實作同名方法
+  authenticate(username, password) -> role | None，登入頁、session、
+  middleware 全部不用管是哪一種
 - 連續登入失敗 → 暫時鎖定該來源 IP（基本暴力破解防護）
-- 純標準庫 + aiohttp（遵守 CLAUDE.md §2.3 相依規則）
+- 純標準庫 + aiohttp（遵守 CLAUDE.md §2.3 相依規則；LDAP 模式額外用 ldap3，
+  只有選用該模式時才需要安裝，見 requirements.txt 說明）
 """
 
 import asyncio
@@ -25,7 +29,7 @@ import time
 from aiohttp import web
 
 from monitor.audit import audit
-from monitor.crypto import hash_password, verify_password  # noqa: F401 (對外沿用既有匯入路徑)
+from monitor.crypto import hash_password, verify_password
 
 COOKIE_NAME = "rm_session"
 
@@ -56,9 +60,9 @@ _DUMMY_HASH = hash_password("dummy-timing-equalizer")
 class LocalAuthenticator:
     """本機帳號檔驗證（accounts.json）。
 
-    LDAP/AD 接口：日後新增 LdapAuthenticator，實作同名方法
-    authenticate(username, password) -> role 字串或 None，
-    在 main.py 依設定選用即可，其餘程式不動。
+    LDAP/AD 模式見 monitor/web/ldap_auth.py 的 LdapAuthenticator，
+    實作同名方法 authenticate(username, password) -> role 字串或 None，
+    main.py 依 config.json 的 auth_backend 選用，其餘程式不動。
     """
 
     def __init__(self, accounts_path: str):
@@ -96,27 +100,6 @@ class LocalAuthenticator:
                 return None
         verify_password(password, _DUMMY_HASH)   # 時間均衡（見上）
         return None
-
-    def set_password(self, username: str, password_hash: str) -> bool:
-        """更新指定帳號的密碼雜湊（自助改密碼／管理員重設用）；
-        找不到帳號回傳 False。每次直接重讀整份檔案再寫回，跟
-        tools/make_user.py 相同的存檔方式，兩邊改動不會互相蓋掉。"""
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (FileNotFoundError, OSError, ValueError):
-            return False
-        users = data.get("users")
-        if not isinstance(users, list):
-            return False
-        for u in users:
-            if u.get("username") == username:
-                u["password"] = password_hash
-                with open(self.path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                    f.write("\n")
-                return True
-        return False
 
 
 class SessionStore:
@@ -217,13 +200,18 @@ SWEEP_INTERVAL = 300.0     # 秒，session 定期清掃間隔（F-09：長年運
 
 
 class AuthManager:
-    """登入功能的組裝：驗證器 + session + 限流 + HTTP handler"""
+    """登入功能的組裝：驗證器 + session + 限流 + HTTP handler。
 
-    def __init__(self, accounts_path: str, idle_minutes: float = 30.0,
+    authenticator 用依賴注入傳入（LocalAuthenticator 或 LdapAuthenticator，
+    見 main.py 的 build_auth_manager 依 config.json 的 auth_backend 選用），
+    本類別不關心是哪一種、只呼叫共同介面 authenticate()/has_users()/list_users()。
+    """
+
+    def __init__(self, authenticator, idle_minutes: float = 30.0,
                  secure_cookie: bool = False, absolute_hours: float = 0.0,
                  max_sessions: int = 200):
         self.log = logging.getLogger("auth")
-        self.authenticator = LocalAuthenticator(accounts_path)
+        self.authenticator = authenticator
         self.sessions = SessionStore(idle_minutes, absolute_hours, max_sessions)
         self.limiter = LoginRateLimiter()
         self.secure_cookie = secure_cookie   # TLS 啟用時 cookie 加 Secure 旗標
@@ -288,26 +276,6 @@ class AuthManager:
         return web.json_response({"auth": True,
                                   "username": sess.get("username"),
                                   "role": sess.get("role")})
-
-    async def change_password(self, request):
-        """POST /api/password：登入者改自己的密碼（需先驗舊密碼），
-        任何角色（viewer/admin）皆可用——auth_middleware 已保證有登入才會
-        走到這裡（見 PUBLIC_PATHS/ADMIN_API_PREFIX，這條路徑兩者都不是）。"""
-        sess = request["user"]
-        username = sess["username"]
-        form = await request.post()
-        old = str(form.get("old_password") or "")
-        new = str(form.get("new_password") or "")
-        if self.authenticator.authenticate(username, old) is None:
-            audit("password_change_fail", username=username)
-            raise web.HTTPBadRequest(
-                text='{"error": "目前密碼不正確"}', content_type="application/json")
-        if len(new) < 8:
-            raise web.HTTPBadRequest(
-                text='{"error": "新密碼至少 8 個字元"}', content_type="application/json")
-        self.authenticator.set_password(username, hash_password(new))
-        audit("password_change", username=username)
-        return web.json_response({"ok": True})
 
 
 @web.middleware
