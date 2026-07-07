@@ -24,6 +24,7 @@ import time
 
 from aiohttp import web
 
+from monitor.audit import audit
 from monitor.crypto import hash_password, verify_password  # noqa: F401 (對外沿用既有匯入路徑)
 
 COOKIE_NAME = "rm_session"
@@ -241,16 +242,21 @@ class AuthManager:
         if role is None:
             self.limiter.fail(ip, username)
             self.log.warning(f"登入失敗（{ip}）")     # 不記帳號名，避免洩漏嘗試內容
+            audit("login_fail", ip=ip, username=username)
             raise web.HTTPSeeOther("/login?err=1")
         self.limiter.clear(ip, username)
         token = self.sessions.create(username, role)
         self.log.info(f"登入成功: {username}（{role}）")
+        audit("login_ok", ip=ip, username=username, role=role)
         resp = web.HTTPSeeOther("/")
         resp.set_cookie(COOKIE_NAME, token, httponly=True, samesite="Lax",
                         secure=self.secure_cookie, path="/")
         return resp
 
     async def logout(self, request):
+        sess = self.session_from(request)
+        if sess is not None:
+            audit("logout", username=sess.get("username"))
         self.sessions.delete(request.cookies.get(COOKIE_NAME))
         resp = web.HTTPSeeOther("/login")
         resp.del_cookie(COOKIE_NAME, path="/")

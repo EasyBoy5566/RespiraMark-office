@@ -14,10 +14,17 @@ from urllib.parse import urlparse
 
 from aiohttp import web, WSMsgType
 
+from monitor.audit import audit
 from monitor.web.auth import auth_middleware
 from monitor.web.security_headers import security_headers_middleware
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+def _actor(request) -> str:
+    """管理操作審計用：登入者帳號（auth_middleware 掛的 request["user"]）；
+    登入未啟用（開發模式）時沒有這個欄位，退回 "?" """
+    return (request.get("user") or {}).get("username") or "?"
 
 
 async def index(request):
@@ -34,6 +41,7 @@ async def admin_accounts(request):
     """GET /api/admin/accounts → 帳號唯讀清單（建立/刪除仍用 tools/make_user.py）"""
     mgr = request.app["authmgr"]
     users = mgr.authenticator.list_users() if mgr is not None else []
+    audit("admin_view_accounts", actor=_actor(request))
     return web.json_response({"users": users})
 
 
@@ -42,6 +50,7 @@ async def admin_remove_device(request):
     hub = request.app["hub"]
     device = request.match_info["device"]
     result = hub.remove_device(device)
+    audit("admin_remove_device", actor=_actor(request), device=device, result=result)
     if result == "ok":
         return web.json_response({"removed": device})
     if result == "online":
@@ -60,6 +69,7 @@ async def admin_syslog(request):
         raise web.HTTPNotFound(
             text='{"error": "尚無 CSV 紀錄（未啟用落地或還沒寫入資料）"}',
             content_type="application/json")
+    audit("admin_download_syslog", actor=_actor(request), device=device)
     return web.FileResponse(path, headers={
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": f'attachment; filename="{os.path.basename(path)}"',

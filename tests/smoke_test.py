@@ -44,6 +44,7 @@ VIEWER_PASS = "SmokeView123"
 
 TMP = tempfile.gettempdir()
 SYS_LOG_DIR = os.path.join(TMP, "respiramark_smoke_syslogs")
+LOG_DIR = os.path.join(TMP, "respiramark_smoke_logs")
 CERT_DIR = os.path.join(TMP, "respiramark_smoke_certs")
 ACCOUNTS = os.path.join(TMP, "respiramark_smoke_accounts.json")
 BASE = f"https://localhost:{WEB_PORT}"
@@ -441,6 +442,21 @@ async def run_checks():
         check("登出後 session 失效（/api/me 401）", r.status == 401)
     await authed.close()
 
+    # ── 審計日誌（IMPROVEMENT_PLAN.md W-109）────────────────────────
+    audit_path = os.path.join(LOG_DIR, "audit.log")
+    audit_text = ""
+    if os.path.exists(audit_path):
+        with open(audit_path, "r", encoding="utf-8") as f:
+            audit_text = f.read()
+    for ev in ("login_ok", "login_fail", "logout", "device_online",
+               "device_offline", "admin_view_accounts", "admin_download_syslog",
+               "admin_remove_device", "device_removed", "device_reject"):
+        check(f"audit.log 含事件 {ev}", ev in audit_text)
+    check("audit.log 不含病人代碼",
+          not any(p in audit_text for p in ("SMOKE001", "SMOKE002", "SMOKE003")))
+    check("audit.log 不含密碼/token 明碼",
+          not any(s in audit_text for s in (ADMIN_PASS, VIEWER_PASS, TOKEN)))
+
 
 def prepare_certs_and_accounts(log_file) -> bool:
     """產生測試憑證與帳號（輸出寫入伺服器 log 檔）；失敗回傳 False"""
@@ -471,6 +487,10 @@ def main():
             os.remove(os.path.join(SYS_LOG_DIR, old))
         except OSError:
             pass
+    try:
+        os.remove(os.path.join(LOG_DIR, "audit.log"))     # 每次重建，避免舊測試殘留
+    except OSError:
+        pass
 
     log_path = os.path.join(TMP, "respiramark_smoke_server.log")
     log_file = open(log_path, "w", encoding="utf-8")
@@ -496,7 +516,7 @@ def main():
                    "tls_cert": os.path.join(CERT_DIR, "server.pem"),
                    "tls_key": os.path.join(CERT_DIR, "server.key"),
                    "auth_enabled": True, "accounts_file": ACCOUNTS,
-                   "session_idle_minutes": 30.0}, f)
+                   "session_idle_minutes": 30.0, "log_dir": LOG_DIR}, f)
 
     procs = []
     try:

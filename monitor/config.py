@@ -38,6 +38,7 @@ DEFAULTS = {
     "session_idle_minutes": 30.0,   # 閒置逾時（sliding）自動登出；0 = 不逾時（護理站看板用）
     "session_absolute_hours": 12.0,  # 登入後最長可用時數，即使一直有操作也會過期；0 = 不限（看板帳號用）
     "session_max": 200,        # session 總量上限，超過淘汰最久沒動作的一筆
+    "log_dir": "logs",         # 審計日誌落地目錄（logs/audit.log，10MB x 5 輪替）
 }
 
 

@@ -16,6 +16,8 @@ import os
 import time
 from collections import deque
 
+from monitor.audit import audit
+
 PROTO_VERSION = 1
 
 # 有狀態的訊息類型：保留最新一則，供 snapshot 給新連入的瀏覽器。
@@ -96,6 +98,7 @@ class TelemetryHub:
             self.log.warning(f"{device} 協議版本 {st.proto} 與伺服器 {PROTO_VERSION} 不同")
         # 資安規則：病人代碼只顯示在儀表板畫面，禁止寫入 log
         self.log.info(f"裝置上線: {device}")
+        audit("device_online", device=device)
         self.broadcast({"type": "link", "device": device, "online": True,
                         "patient": st.patient, "v": st.proto})
         return device, st.conn_seq
@@ -130,6 +133,7 @@ class TelemetryHub:
             return                       # 已被新連線取代
         st.online = False
         self.log.info(f"裝置離線: {device}")
+        audit("device_offline", device=device, reason="disconnected")
         self.broadcast({"type": "link", "device": device, "online": False})
 
     def sys_history(self, device: str) -> list:
@@ -154,6 +158,7 @@ class TelemetryHub:
                 pass
         del self.devices[device]
         self.log.info(f"管理員移除離線裝置: {device}")
+        audit("device_removed", device=device)
         self.broadcast({"type": "device_removed", "device": device})
         return "ok"
 
@@ -204,6 +209,7 @@ class TelemetryHub:
                 if st.online and now - st.last_seen > self.offline_timeout:
                     st.online = False
                     self.log.warning(f"裝置逾時離線: {st.device}")
+                    audit("device_offline", device=st.device, reason="timeout")
                     self.broadcast({"type": "link", "device": st.device, "online": False})
 
     # ── 瀏覽器端 ────────────────────────────────────────────────────

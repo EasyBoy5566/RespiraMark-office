@@ -13,6 +13,8 @@ import hmac
 import json
 import logging
 
+from monitor.audit import audit
+
 MAX_LINE = 64 * 1024       # 單行訊息上限（防禦異常資料；正常 wave/params 批次遠小於此）
 READ_LIMIT = 1024 * 1024   # asyncio stream 讀取緩衝上限
 
@@ -42,6 +44,7 @@ async def handle_ingest(reader, writer, hub, token="", max_conns=64,
     if counter is not None:
         if counter.count >= max_conns:
             log.warning(f"{peer} 連線數已達上限 {max_conns}，拒絕連線")
+            audit("device_reject", reason="max_conns", peer=str(peer))
             try:
                 writer.close()
             except OSError:
@@ -55,7 +58,9 @@ async def handle_ingest(reader, writer, hub, token="", max_conns=64,
             try:
                 line = await asyncio.wait_for(reader.readline(), timeout=timeout)
             except asyncio.TimeoutError:
+                reason = "hello_timeout" if device is None else "idle_timeout"
                 log.warning(f"{peer} {'等待 hello' if device is None else '閒置'}逾時，斷線")
+                audit("device_reject", reason=reason, peer=str(peer), device=device)
                 break
             except (ValueError, asyncio.LimitOverrunError):
                 log.warning(f"{peer} 訊息過長，斷線")
@@ -73,23 +78,31 @@ async def handle_ingest(reader, writer, hub, token="", max_conns=64,
             if device is None:
                 if msg.get("type") != "hello":
                     log.warning(f"{peer} 第一則訊息不是 hello，斷線")
+                    audit("device_reject", reason="not_hello", peer=str(peer))
                     break
+                attempted_device = str(msg.get("device") or "")
                 # 存取驗證（見 PROTOCOL.md）；注意：token 值不得寫入 log。
                 # devices.json 存在 → 每台裝置獨立 token（IMPROVEMENT_PLAN.md F-01）；
                 # 否則退回舊版單一 ingest_token（向後相容）。兩種模式失敗都用同一句
                 # log，不透露是裝置不存在、被停用、還是 token 錯誤。
                 dev_token = str(msg.get("token") or "")
                 if devices is not None and devices.exists():
-                    if not devices.verify(str(msg.get("device") or ""), dev_token):
+                    if not devices.verify(attempted_device, dev_token):
                         log.warning(f"{peer} 裝置權杖驗證失敗，斷線")
+                        audit("device_reject", reason="bad_device_token",
+                             peer=str(peer), device=attempted_device)
                         break
                 # 用常數時間比對，避免用回應時間差猜出正確 token（timing attack）
                 elif token and not hmac.compare_digest(dev_token, token):
                     log.warning(f"{peer} token 驗證失敗，斷線")
+                    audit("device_reject", reason="bad_shared_token",
+                         peer=str(peer), device=attempted_device)
                     break
                 accepted = hub.device_hello(msg)
                 if accepted is None:
                     log.warning(f"{peer} 裝置數已達上限，拒絕連線")
+                    audit("device_reject", reason="max_devices",
+                         peer=str(peer), device=attempted_device)
                     break
                 device, conn_seq = accepted
             else:

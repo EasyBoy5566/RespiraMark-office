@@ -19,6 +19,7 @@ import os
 import socket
 import ssl
 import sys
+from logging.handlers import RotatingFileHandler
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.hub import TelemetryHub
@@ -70,6 +71,23 @@ def build_auth_manager(cfg: dict, tls_on: bool):
     return mgr
 
 
+def setup_audit_log(cfg: dict):
+    """掛上審計日誌的檔案 handler（logs/audit.log，10MB×5 輪替，UTF-8）。
+    只寫檔、不印主控台（避免跟一般運行 log 混在一起）；
+    monitor/audit.py 的 audit() 呼叫最終都會經由這個 handler 落地。"""
+    log_dir = _resolve(str(cfg.get("log_dir") or "logs"))
+    os.makedirs(log_dir, exist_ok=True)
+    handler = RotatingFileHandler(os.path.join(log_dir, "audit.log"),
+                                  maxBytes=10 * 1024 * 1024, backupCount=5,
+                                  encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    audit_logger = logging.getLogger("audit")
+    audit_logger.addHandler(handler)
+    audit_logger.setLevel(logging.INFO)
+    audit_logger.propagate = False
+
+
 def lan_ip() -> str:
     """找出本機對外的區網 IP（不會真的發封包）"""
     try:
@@ -113,6 +131,7 @@ async def main():
         datefmt="%H:%M:%S",
     )
     cfg = load_config(args.config)
+    setup_audit_log(cfg)
 
     sys_log_dir = _resolve(str(cfg.get("sys_log_dir") or ""))
 

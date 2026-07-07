@@ -15,6 +15,9 @@ certs/
 # Pi 系統狀態長期落地 CSV（每台伺服器各自累積，不進 git）
 sys_logs/
 
+# 審計/運行日誌（每台伺服器各自累積，不進 git）
+logs/
+
 # 系統
 .DS_Store
 Thumbs.db
