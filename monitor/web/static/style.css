@@ -91,6 +91,14 @@ header {
 }
 .theme-btn:hover { background: var(--hover); color: var(--text-primary); }
 
+/* ── Footer：免責聲明常駐 + 版本號（三頁共用，見 footer.js）───── */
+.disclaimer {
+  text-align: center;
+  color: var(--text-disabled);
+  font-size: 12px;
+  padding: 14px 10px;
+}
+
 /* ── 卡片格線：固定兩欄（窄螢幕/手機退回一欄）──────────────── */
 main#grid {
   display: grid;

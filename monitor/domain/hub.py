@@ -212,6 +212,10 @@ class TelemetryHub:
                     audit("device_offline", device=st.device, reason="timeout")
                     self.broadcast({"type": "link", "device": st.device, "online": False})
 
+    def device_count(self) -> int:
+        """目前追蹤的裝置數（含離線；供 /healthz 用，不含任何裝置名稱/病人資訊）"""
+        return len(self.devices)
+
     # ── 瀏覽器端 ────────────────────────────────────────────────────
 
     def snapshot(self) -> dict:

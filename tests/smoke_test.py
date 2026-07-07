@@ -234,6 +234,18 @@ async def collect_ws(session, seconds=4.0):
 async def run_checks():
     check("網頁伺服器啟動（HTTPS 200）", await wait_web_up())
 
+    # ── /healthz（IMPROVEMENT_PLAN.md W-203）─────────────────────────
+    async with new_session() as s:
+        async with s.get(f"{BASE}/healthz") as r:
+            body = await r.json() if r.status == 200 else {}
+            check("未登入可存取 /healthz", r.status == 200, body)
+            check("/healthz 回應含 ok/version/devices/uptime_s",
+                  body.get("ok") is True and "version" in body
+                  and isinstance(body.get("devices"), int)
+                  and isinstance(body.get("uptime_s"), (int, float)), body)
+            check("/healthz 不洩漏裝置名稱或病人代碼",
+                  "smoke-01" not in json.dumps(body) and "SMOKE" not in json.dumps(body))
+
     # ── 安全標頭（IMPROVEMENT_PLAN.md W-105）────────────────────────
     # 故意用一個會被 auth_middleware raise HTTPException 的路徑（未登入 /history）
     # 驗證：這種例外回應也要有標頭，不能只有正常 return 的 200 才有
@@ -253,9 +265,12 @@ async def run_checks():
     async with new_session() as s:
         async with s.get(f"{BASE}/") as r:
             check("未登入自動導向登入頁", r.status == 200 and r.url.path == "/login")
+            login_html = await r.text()
+            check("登入頁含免責聲明（IMPROVEMENT_PLAN.md W-301）",
+                  "僅供觀察參考" in login_html)
         for path in ("/static/app.js", "/static/style.css", "/static/login.js",
                      "/static/sys.js", "/static/auth.js", "/static/admin.js",
-                     "/static/alarm_levels.js"):
+                     "/static/alarm_levels.js", "/static/footer.js"):
             async with s.get(f"{BASE}{path}") as r:
                 check(f"靜態資源 {path}", r.status == 200)
         async with s.get(f"{BASE}/history/smoke-01") as r:

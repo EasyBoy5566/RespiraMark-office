@@ -30,7 +30,7 @@ from monitor.crypto import hash_password, verify_password  # noqa: F401 (對外�
 COOKIE_NAME = "rm_session"
 
 # 不需登入即可存取的路徑（登入頁本身與靜態資源；資料端點一律受保護）
-PUBLIC_PATHS = {"/login"}
+PUBLIC_PATHS = {"/login", "/healthz"}
 PUBLIC_PREFIXES = ("/static/",)
 
 # 只有 admin 角色能進的路徑（管理頁與其 API，見 PROTOCOL.md「管理頁」）

@@ -10,11 +10,13 @@ import asyncio
 import json
 import logging
 import os
+import time
 from urllib.parse import urlparse
 
 from aiohttp import web, WSMsgType
 
 from monitor.audit import audit
+from monitor.version import VERSION
 from monitor.web.auth import auth_middleware
 from monitor.web.security_headers import security_headers_middleware
 
@@ -25,6 +27,16 @@ def _actor(request) -> str:
     """管理操作審計用：登入者帳號（auth_middleware 掛的 request["user"]）；
     登入未啟用（開發模式）時沒有這個欄位，退回 "?" """
     return (request.get("user") or {}).get("username") or "?"
+
+
+async def healthz(request):
+    """GET /healthz → 免登入健康檢查（IMPROVEMENT_PLAN.md W-203）。
+    刻意只回最精簡資訊：不含裝置清單/名稱、不含病人資訊，
+    供資訊室監控系統定期探測用，不是給人看的頁面。"""
+    hub = request.app["hub"]
+    uptime_s = round(time.time() - request.app["start_time"], 1)
+    return web.json_response({"ok": True, "version": VERSION,
+                              "devices": hub.device_count(), "uptime_s": uptime_s})
 
 
 async def index(request):
@@ -145,6 +157,8 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     app["hub"] = hub
     app["authmgr"] = authmgr                     # None = 登入未啟用（開發模式）
     app["tls_enabled"] = tls_enabled
+    app["start_time"] = time.time()
+    app.router.add_get("/healthz", healthz)
     app.router.add_get("/", index)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/ws", ws_handler)
