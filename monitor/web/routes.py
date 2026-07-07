@@ -10,12 +10,14 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 from urllib.parse import urlparse
 
 from aiohttp import web, WSMsgType
 
 from monitor.audit import audit
+from monitor.crypto import hash_password
 from monitor.version import VERSION
 from monitor.web.auth import auth_middleware
 from monitor.web.security_headers import security_headers_middleware
@@ -86,6 +88,20 @@ async def admin_syslog(request):
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": f'attachment; filename="{os.path.basename(path)}"',
     })
+
+
+async def admin_reset_password(request):
+    """POST /api/admin/reset-password/{username} → 管理員重設任一帳號密碼
+    （W-303）。產生一次性隨機密碼，**只在這次回應顯示一次**，伺服器不留明碼。"""
+    mgr = request.app["authmgr"]
+    username = request.match_info["username"]
+    new_password = secrets.token_urlsafe(9)     # 約 12 字元，好念好打
+    ok = mgr is not None and mgr.authenticator.set_password(username, hash_password(new_password))
+    if not ok:
+        raise web.HTTPNotFound(
+            text='{"error": "未知帳號"}', content_type="application/json")
+    audit("admin_reset_password", actor=_actor(request), target=username)
+    return web.json_response({"username": username, "new_password": new_password})
 
 
 async def admin_alarmlog(request):
@@ -183,11 +199,13 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     app.router.add_delete("/api/admin/devices/{device}", admin_remove_device)
     app.router.add_get("/api/admin/syslog/{device}", admin_syslog)
     app.router.add_get("/api/admin/alarmlog/{device}", admin_alarmlog)
+    app.router.add_post("/api/admin/reset-password/{username}", admin_reset_password)
     if authmgr is not None:
         app.router.add_get("/login", authmgr.login_page)
         app.router.add_post("/login", authmgr.login_post)
         app.router.add_post("/logout", authmgr.logout)
         app.router.add_get("/api/me", authmgr.api_me)
+        app.router.add_post("/api/password", authmgr.change_password)
     else:
         app.router.add_get("/login", _login_disabled)
         app.router.add_post("/logout", _login_disabled)

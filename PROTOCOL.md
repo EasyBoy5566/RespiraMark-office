@@ -25,6 +25,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `POST /login` | 表單欄位 `username` / `password`；成功 → 設 session cookie 並導向 `/`；失敗 → 導回 `/login?err=1`（鎖定中 `?err=lock`） |
 | `POST /logout` | 登出（清除 session）並導向 `/login` |
 | `GET /api/me` | 目前登入者 `{"auth":true,"username":...,"role":...}`；未登入回 401（前端以此偵測 session 過期並導回登入頁） |
+| `POST /api/password` | 登入者自助改自己的密碼（任何角色皆可）。表單欄位 `old_password`/`new_password`（≥8 碼）；舊密碼錯回 400、成功回 `{"ok":true}` |
 
 **管理頁（僅 `admin` 角色）**：`/admin` 與 `/api/admin/*` 需要 admin session；viewer 存取 `/admin` 會被導回 `/`、存取 `/api/admin/*` 回 403。未登入存取 `/admin` 導向 `/login`。登入未啟用（開發模式）時不設限。
 
@@ -32,6 +33,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 |---|---|
 | `GET /admin` | 設備維護管理頁：所有裝置健康總表 + sys 趨勢圖 |
 | `GET /api/admin/accounts` | 帳號唯讀清單 `{"users":[{"username":...,"role":...}]}`（不含密碼雜湊；建立/刪除仍用 `tools/make_user.py`） |
+| `POST /api/admin/reset-password/{username}` | 管理員重設任一帳號密碼：產生一次性隨機密碼，回應 `{"username":...,"new_password":...}`（**只在這次回應顯示，伺服器不留明碼**）；未知帳號回 404 |
 | `DELETE /api/admin/devices/{device}` | 移除**離線**裝置（清出儀表板版面；裝置重新連上會自動回來）。線上裝置回 409、未知裝置回 404 |
 | `GET /api/admin/syslog/{device}` | 下載該裝置的長期 sys CSV（`sys_<裝置>.csv`）；無檔案（未啟用落地或尚無資料）回 404 |
 | `GET /api/admin/alarmlog/{device}` | 下載該裝置的警報事件歷史 CSV（`alarm_<裝置>.csv`，欄位 `time,event,cp,code,prio,text`，`event` 為 `appeared`/`cleared`；只記機台編號與警報內容，不記病人代碼）；無檔案回 404 |

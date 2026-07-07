@@ -471,6 +471,46 @@ async def run_checks():
     async with authed.get(f"{BASE}/api/admin/alarmlog/smoke-01") as r:
         check("未曾發生警報的裝置下載回 404（smoke-01 全程無警報）", r.status == 404)
 
+    # ── 自助改密碼（IMPROVEMENT_PLAN.md W-303）───────────────────────
+    # 用 viewer 帳號測試（不是 authed/admin），避免影響後面還要用到的 admin session
+    pw_session = new_session()
+    async with pw_session.post(f"{BASE}/login", data={
+            "username": VIEWER_USER, "password": VIEWER_PASS}) as r:
+        check("改密碼測試前置：viewer 登入成功", r.status == 200 and r.url.path == "/")
+    async with pw_session.post(f"{BASE}/api/password", data={
+            "old_password": "wrong-old-password", "new_password": "NewViewerPass1"}) as r:
+        check("舊密碼錯誤時改密碼被拒（400）", r.status == 400)
+    async with pw_session.post(f"{BASE}/api/password", data={
+            "old_password": VIEWER_PASS, "new_password": "short"}) as r:
+        check("新密碼太短被拒（400）", r.status == 400)
+    async with pw_session.post(f"{BASE}/api/password", data={
+            "old_password": VIEWER_PASS, "new_password": "NewViewerPass1"}) as r:
+        check("正確舊密碼＋合法新密碼 → 改密碼成功", r.status == 200)
+    await pw_session.close()
+
+    async with new_session() as s:
+        async with s.post(f"{BASE}/login", data={
+                "username": VIEWER_USER, "password": VIEWER_PASS}) as r:
+            check("改密碼後舊密碼登入失敗", r.url.path == "/login" and "err" in r.url.query)
+        async with s.post(f"{BASE}/login", data={
+                "username": VIEWER_USER, "password": "NewViewerPass1"}) as r:
+            check("改密碼後新密碼可登入", r.status == 200 and r.url.path == "/")
+        async with s.post(f"{BASE}/api/admin/reset-password/{ADMIN_USER}") as r:
+            check("viewer 無法重設他人密碼（403）", r.status == 403)
+
+    # 管理員重設任一帳號密碼
+    async with authed.post(f"{BASE}/api/admin/reset-password/{VIEWER_USER}") as r:
+        data = await r.json() if r.status == 200 else {}
+        check("admin 可重設帳號密碼", r.status == 200 and "new_password" in data, data)
+        reset_pw = data.get("new_password")
+    async with authed.post(f"{BASE}/api/admin/reset-password/no-such-user") as r:
+        check("重設未知帳號回 404", r.status == 404)
+    if reset_pw:
+        async with new_session() as s:
+            async with s.post(f"{BASE}/login", data={
+                    "username": VIEWER_USER, "password": reset_pw}) as r:
+                check("管理員重設的密碼可登入", r.status == 200 and r.url.path == "/")
+
     # ── 登出 ────────────────────────────────────────────────────────
     async with authed.post(f"{BASE}/logout") as r:
         check("登出導回登入頁", r.url.path == "/login")

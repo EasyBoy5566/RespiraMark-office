@@ -12,6 +12,7 @@
     <div class="header-right">
       <a class="theme-btn" href="/">← 監視儀表板</a>
       <span id="who" class="who"></span>
+      <button id="pwBtn" class="theme-btn hidden" type="button">🔑 改密碼</button>
       <button id="logoutBtn" class="theme-btn hidden" type="button">登出</button>
       <button id="themeToggle" class="theme-btn" type="button">☀ 淺色</button>
       <span id="conn" class="conn offline">● 連線中…</span>
@@ -31,16 +32,33 @@
     </section>
 
     <section>
-      <h2>帳號清單（唯讀）</h2>
+      <h2>帳號清單</h2>
       <div class="acc-card">
         <table class="acc-table" id="accTable">
-          <thead><tr><th>帳號</th><th>角色</th></tr></thead>
+          <thead><tr><th>帳號</th><th>角色</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
-      <p class="admin-hint">建立、刪除帳號或改密碼：在伺服器執行 python tools/make_user.py（本頁只供檢視）。</p>
+      <p class="admin-hint">
+        每人可點右上角「🔑 改密碼」自行修改自己的密碼；忘記密碼時可由管理員在此重設
+        （產生一次性隨機密碼，只顯示一次，請立刻告知本人）。建立、刪除帳號仍須在伺服器
+        執行 python tools/make_user.py。
+      </p>
     </section>
   </main>
+
+  <div id="pwModal" class="overlay hidden">
+    <div class="login-card pw-card">
+      <h1>修改密碼</h1>
+      <label for="pwOld">目前密碼</label>
+      <input id="pwOld" type="password" autocomplete="current-password">
+      <label for="pwNew">新密碼（至少 8 碼）</label>
+      <input id="pwNew" type="password" autocomplete="new-password">
+      <button id="pwSubmit" class="login-btn" type="button">確認修改</button>
+      <button id="pwCancel" class="theme-btn" type="button">取消</button>
+      <div id="pwErr" class="login-err hidden"></div>
+    </div>
+  </div>
 
   <footer class="disclaimer">本畫面僅供觀察參考，不可作為臨床警報依據 · <span id="verInfo"></span></footer>
 

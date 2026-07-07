@@ -97,6 +97,27 @@ class LocalAuthenticator:
         verify_password(password, _DUMMY_HASH)   # 時間均衡（見上）
         return None
 
+    def set_password(self, username: str, password_hash: str) -> bool:
+        """更新指定帳號的密碼雜湊（自助改密碼／管理員重設用）；
+        找不到帳號回傳 False。每次直接重讀整份檔案再寫回，跟
+        tools/make_user.py 相同的存檔方式，兩邊改動不會互相蓋掉。"""
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, OSError, ValueError):
+            return False
+        users = data.get("users")
+        if not isinstance(users, list):
+            return False
+        for u in users:
+            if u.get("username") == username:
+                u["password"] = password_hash
+                with open(self.path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+                return True
+        return False
+
 
 class SessionStore:
     """伺服器端 session（記憶體）；sliding 閒置逾時 + 選用絕對逾時 + 總量上限。
@@ -267,6 +288,26 @@ class AuthManager:
         return web.json_response({"auth": True,
                                   "username": sess.get("username"),
                                   "role": sess.get("role")})
+
+    async def change_password(self, request):
+        """POST /api/password：登入者改自己的密碼（需先驗舊密碼），
+        任何角色（viewer/admin）皆可用——auth_middleware 已保證有登入才會
+        走到這裡（見 PUBLIC_PATHS/ADMIN_API_PREFIX，這條路徑兩者都不是）。"""
+        sess = request["user"]
+        username = sess["username"]
+        form = await request.post()
+        old = str(form.get("old_password") or "")
+        new = str(form.get("new_password") or "")
+        if self.authenticator.authenticate(username, old) is None:
+            audit("password_change_fail", username=username)
+            raise web.HTTPBadRequest(
+                text='{"error": "目前密碼不正確"}', content_type="application/json")
+        if len(new) < 8:
+            raise web.HTTPBadRequest(
+                text='{"error": "新密碼至少 8 個字元"}', content_type="application/json")
+        self.authenticator.set_password(username, hash_password(new))
+        audit("password_change", username=username)
+        return web.json_response({"ok": True})
 
 
 @web.middleware

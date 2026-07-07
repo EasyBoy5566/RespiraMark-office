@@ -340,6 +340,10 @@ main#grid {
 .login-btn:hover { background: var(--blue-hover); }
 .login-err { margin-top: 14px; color: var(--red); font-size: 13px; }
 
+/* 改密碼小視窗（重用 .overlay 當背景遮罩＋ .login-card 當卡片樣式，見 auth.js） */
+#pwModal { display: flex; align-items: center; justify-content: center; }
+#pwCancel { width: 100%; margin-top: 10px; }
+
 /* Header 登入者顯示 */
 .who { color: var(--text-secondary); font-size: 14px; }
 
