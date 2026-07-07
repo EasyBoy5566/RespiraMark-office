@@ -290,6 +290,9 @@ async def run_checks():
     async with authed.post(f"{BASE}/login", data={
             "username": ADMIN_USER, "password": ADMIN_PASS}) as r:
         check("正確帳密登入 → 進入儀表板", r.status == 200 and r.url.path == "/")
+        dash_html = await r.text()
+        check("儀表板含離線提示音開關（IMPROVEMENT_PLAN.md W-304）",
+              'id="soundToggle"' in dash_html)
     async with authed.get(f"{BASE}/api/me") as r:
         me = await r.json() if r.status == 200 else {}
         check("/api/me 回報登入者與角色",

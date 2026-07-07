@@ -59,6 +59,40 @@ let initTheme = "dark";
 try { initTheme = localStorage.getItem("rm-theme") || "dark"; } catch (e) { /* 同上 */ }
 applyTheme(initTheme);
 
+// ── 裝置離線提示音（預設關，設定存 localStorage；IMPROVEMENT_PLAN.md W-304）──
+const soundBtn = document.getElementById("soundToggle");
+let offlineSoundOn = false;
+try { offlineSoundOn = localStorage.getItem("rm-offline-sound") === "1"; } catch (e) { /* 同上 */ }
+
+function applySoundBtn() {
+  soundBtn.textContent = offlineSoundOn ? "🔔 離線提示音" : "🔕 離線提示音";
+  soundBtn.classList.toggle("active", offlineSoundOn);
+}
+soundBtn.addEventListener("click", () => {
+  offlineSoundOn = !offlineSoundOn;
+  try { localStorage.setItem("rm-offline-sound", offlineSoundOn ? "1" : "0"); } catch (e) { /* 同上 */ }
+  applySoundBtn();
+});
+applySoundBtn();
+
+/** 純 Web Audio 產生的短嗶聲（不用外部音檔，零相依）；瀏覽器不支援或
+ * 被自動播放政策擋下時靜默忽略，不影響任何功能 */
+function playOfflineBeep() {
+  if (!offlineSoundOn) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+    osc.onended = () => ctx.close();
+  } catch (e) { /* 靜默忽略 */ }
+}
+
 // ── 裝置物件與卡片 ───────────────────────────────────────────────
 function ensureDev(id) {
   let dev = devices.get(id);
@@ -351,6 +385,7 @@ function onLink(dev, m) {
     el.textContent = "已連線";
     if (m.patient !== undefined) setPatient(dev, m.patient);
   } else {
+    if (!dev.card.classList.contains("pi-offline")) playOfflineBeep();  // 只在剛離線那一刻響
     dev.card.classList.add("pi-offline");
     el.className = "link-status off";
     el.textContent = "離線";

@@ -90,6 +90,7 @@ header {
   text-decoration: none;    /* 連結型按鈕（設備管理入口、返回儀表板）與按鈕外觀一致 */
 }
 .theme-btn:hover { background: var(--hover); color: var(--text-primary); }
+.theme-btn.active { border-color: var(--blue); color: var(--blue); }
 
 /* ── Footer：免責聲明常駐 + 版本號（三頁共用，見 footer.js）───── */
 .disclaimer {
@@ -127,8 +128,10 @@ main#grid {
   cursor: pointer;
 }
 .card:hover { border-color: var(--hover); }
-.card.pi-offline { opacity: 0.55; }
-.card.pi-offline .card-head { border-left: 4px solid var(--red); }
+/* 離線醒目樣式（IMPROVEMENT_PLAN.md W-304）：紅框＋紅底 header 一眼可辨，
+ * 波形區維持原始亮度所在仍讀得到最後數值，只把整張卡稍微壓暗以示「非即時」 */
+.card.pi-offline { border-color: var(--red); border-width: 2px; filter: brightness(0.85); }
+.card.pi-offline .card-head { border-left: 4px solid var(--red); background: var(--alarm-bg); }
 
 .card-head {
   display: flex; align-items: center; gap: 8px;
