@@ -229,6 +229,21 @@ async def collect_ws(session, seconds=4.0):
 async def run_checks():
     check("網頁伺服器啟動（HTTPS 200）", await wait_web_up())
 
+    # ── 安全標頭（IMPROVEMENT_PLAN.md W-105）────────────────────────
+    # 故意用一個會被 auth_middleware raise HTTPException 的路徑（未登入 /history）
+    # 驗證：這種例外回應也要有標頭，不能只有正常 return 的 200 才有
+    async with new_session() as s:
+        async with s.get(f"{BASE}/history/smoke-01") as r:
+            h = r.headers
+            check("安全標頭齊全（含例外回應）",
+                  h.get("X-Frame-Options") == "DENY"
+                  and h.get("X-Content-Type-Options") == "nosniff"
+                  and h.get("Content-Security-Policy", "").startswith("default-src 'self'")
+                  and h.get("Referrer-Policy") == "no-referrer", dict(h))
+            check("TLS 啟用時有 HSTS 標頭", "Strict-Transport-Security" in h)
+            check("Server 標頭已覆寫（不洩漏 aiohttp 版本）",
+                  "aiohttp" not in h.get("Server", "").lower(), h.get("Server"))
+
     # ── 登入驗證路徑 ────────────────────────────────────────────────
     async with new_session() as s:
         async with s.get(f"{BASE}/") as r:

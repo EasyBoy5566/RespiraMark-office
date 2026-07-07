@@ -14,6 +14,7 @@ import os
 from aiohttp import web, WSMsgType
 
 from monitor.web.auth import auth_middleware
+from monitor.web.security_headers import security_headers_middleware
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -112,11 +113,14 @@ async def _ws_sender(ws, q: asyncio.Queue):
         pass
 
 
-def create_app(hub, authmgr=None) -> web.Application:
+def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
-    app = web.Application(middlewares=[auth_middleware])
+    # security_headers 排最外層：auth_middleware 的 401/403/redirect 多半是
+    # raise HTTPException 而非 return，要包在外面才能連這些回應也補上標頭
+    app = web.Application(middlewares=[security_headers_middleware, auth_middleware])
     app["hub"] = hub
     app["authmgr"] = authmgr                     # None = 登入未啟用（開發模式）
+    app["tls_enabled"] = tls_enabled
     app.router.add_get("/", index)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/ws", ws_handler)
@@ -139,7 +143,7 @@ def create_app(hub, authmgr=None) -> web.Application:
 
 async def start_web(hub, port: int, ssl_ctx=None, authmgr=None):
     """啟動網頁伺服器（ssl_ctx 非 None 時為 HTTPS/WSS），回傳 runner"""
-    runner = web.AppRunner(create_app(hub, authmgr))
+    runner = web.AppRunner(create_app(hub, authmgr, tls_enabled=ssl_ctx is not None))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port, ssl_context=ssl_ctx).start()
     return runner
