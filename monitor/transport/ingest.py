@@ -13,20 +13,49 @@ import hmac
 import json
 import logging
 
-MAX_LINE = 512 * 1024      # 單行訊息上限（防禦異常資料）
+MAX_LINE = 64 * 1024       # 單行訊息上限（防禦異常資料；正常 wave/params 批次遠小於此）
 READ_LIMIT = 1024 * 1024   # asyncio stream 讀取緩衝上限
 
 
-async def handle_ingest(reader, writer, hub, token=""):
-    """單一 Pi 連線的生命週期：hello（含 token 驗證）→ 持續收訊息 → 斷線通知 Hub"""
+class _ConnCounter:
+    """單執行緒 asyncio 內共用的連線計數器（不需要 lock）"""
+    __slots__ = ("count",)
+
+    def __init__(self):
+        self.count = 0
+
+
+async def handle_ingest(reader, writer, hub, token="", max_conns=64,
+                         hello_timeout=10.0, idle_timeout=60.0, counter=None):
+    """單一 Pi 連線的生命週期：hello（含 token 驗證）→ 持續收訊息 → 斷線通知 Hub。
+
+    連線防護（IMPROVEMENT_PLAN.md F-02）：同時連線數超過 max_conns 直接拒絕；
+    等 hello 逾時 hello_timeout 秒、hello 通過後閒置逾時 idle_timeout 秒皆斷線
+    ——Pi 端本來就每 2 秒送一次 ping，idle_timeout 預設 60 秒留有充裕餘裕。
+    """
     log = logging.getLogger("ingest")
     peer = writer.get_extra_info("peername")
     device = None
     conn_seq = None
+
+    if counter is not None:
+        if counter.count >= max_conns:
+            log.warning(f"{peer} 連線數已達上限 {max_conns}，拒絕連線")
+            try:
+                writer.close()
+            except OSError:
+                pass
+            return
+        counter.count += 1
+
     try:
         while True:
+            timeout = hello_timeout if device is None else idle_timeout
             try:
-                line = await reader.readline()
+                line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+            except asyncio.TimeoutError:
+                log.warning(f"{peer} {'等待 hello' if device is None else '閒置'}逾時，斷線")
+                break
             except (ValueError, asyncio.LimitOverrunError):
                 log.warning(f"{peer} 訊息過長，斷線")
                 break
@@ -55,10 +84,15 @@ async def handle_ingest(reader, writer, hub, token=""):
                     break
                 device, conn_seq = accepted
             else:
+                if not _valid_message(msg):
+                    log.warning(f"{peer} {msg.get('type')} 訊息格式異常（忽略該則）")
+                    continue
                 hub.device_message(device, conn_seq, msg)
     except (ConnectionResetError, OSError):
         pass
     finally:
+        if counter is not None:
+            counter.count -= 1
         hub.device_disconnected(device, conn_seq)
         try:
             writer.close()
@@ -66,10 +100,51 @@ async def handle_ingest(reader, writer, hub, token=""):
             pass
 
 
-async def start_ingest(hub, port: int, token: str = "", ssl_ctx=None):
+MAX_WAVE_SAMPLES = 2000     # 每批次上限（正常批次遠小於此，實測 ~15~100 樣本）
+MAX_KV_ITEMS = 200          # params 的 settings/measured 鍵數上限
+MAX_KV_STR_LEN = 200        # 上述 dict 內字串值長度上限
+
+
+def _valid_array(v, max_len) -> bool:
+    return isinstance(v, list) and len(v) <= max_len \
+        and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
+
+
+def _valid_kv(d, max_items, max_str_len) -> bool:
+    if not isinstance(d, dict) or len(d) > max_items:
+        return False
+    return all(not isinstance(v, str) or len(v) <= max_str_len for v in d.values())
+
+
+def _valid_message(msg: dict) -> bool:
+    """已知類型做基本結構驗證（防禦異常/惡意裝置灌爆觀看端與伺服器記憶體）；
+    未知類型交給 hub 層既有的「Tolerant Reader」規則忽略，這裡一律放行。"""
+    t = msg.get("type")
+    if t == "wave":
+        p, f, v = msg.get("p"), msg.get("f"), msg.get("v")
+        n = len(p) if isinstance(p, list) else -1
+        if not (0 <= n <= MAX_WAVE_SAMPLES):
+            return False
+        if not (_valid_array(p, MAX_WAVE_SAMPLES) and _valid_array(f, MAX_WAVE_SAMPLES)
+                and _valid_array(v, MAX_WAVE_SAMPLES)
+                and len(f) == n and len(v) == n):
+            return False
+        trig = msg.get("trig", [])
+        return isinstance(trig, list) and all(isinstance(i, int) for i in trig)
+    if t == "params":
+        return _valid_kv(msg.get("settings", {}), MAX_KV_ITEMS, MAX_KV_STR_LEN) \
+            and _valid_kv(msg.get("measured", {}), MAX_KV_ITEMS, MAX_KV_STR_LEN)
+    return True
+
+
+async def start_ingest(hub, port: int, token: str = "", ssl_ctx=None,
+                        max_conns: int = 64, hello_timeout: float = 10.0,
+                        idle_timeout: float = 60.0):
     """啟動 TCP 接收伺服器；token 非空時對所有連線做 hello 驗證；
     ssl_ctx 非 None 時整條連線走 TLS（Pi 端需以 tls_ca 信任本伺服器的 CA）"""
+    counter = _ConnCounter()
     return await asyncio.start_server(
-        lambda r, w: handle_ingest(r, w, hub, token),
+        lambda r, w: handle_ingest(r, w, hub, token, max_conns, hello_timeout,
+                                   idle_timeout, counter),
         "0.0.0.0", port, limit=READ_LIMIT, ssl=ssl_ctx,
     )

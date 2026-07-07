@@ -17,6 +17,11 @@ DEFAULTS = {
     "offline_timeout": 5.0,   # 秒，無資料判定裝置離線
     "ingest_token": "",       # Pi 連入的存取權杖；空字串 = 不驗證（僅限開發環境）
     "max_devices": 16,        # 裝置數上限，超過即拒絕新裝置（防範記憶體被塞爆）
+    # ── ingest 連線防護（防範區網內異常/惡意連線耗盡資源）──
+    "ingest_max_conns": 64,       # 同時 TCP 連線數上限，超過直接拒絕新連線
+    "ingest_hello_timeout": 10.0,  # 秒，連線後這麼久沒收到合法 hello 就斷線
+    "ingest_idle_timeout": 60.0,   # 秒，hello 通過後這麼久沒收到任何訊息就斷線（Pi 每 2 秒 ping，此值留寬裕）
+    "max_viewers": 50,         # 同時瀏覽器觀看端（WebSocket）數上限，超過拒絕新連線
     # Pi 系統狀態（sys）：記憶體保留的樣本數（趨勢圖用；720 ≈ 1 小時 @ 5s）
     "sys_history_max": 720,
     # 系統狀態長期落地目錄（相對專案根目錄；空字串 = 不落地，只留記憶體歷史）

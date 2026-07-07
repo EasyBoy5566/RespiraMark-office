@@ -54,10 +54,11 @@ class DeviceState:
 class TelemetryHub:
     def __init__(self, offline_timeout: float = 5.0, max_devices: int = 16,
                  sys_history_max: int = 720, sys_log_dir: str = "",
-                 sys_csv_interval: float = 60.0):
+                 sys_csv_interval: float = 60.0, max_viewers: int = 50):
         self.log = logging.getLogger("hub")
         self.offline_timeout = offline_timeout
         self.max_devices = max_devices
+        self.max_viewers = max_viewers
         self.sys_history_max = sys_history_max
         # CSV 寫入節流間隔（秒）：只放慢長期落地檔，即時畫面/記憶體歷史仍隨 Pi 送出頻率更新
         self.sys_csv_interval = sys_csv_interval
@@ -217,7 +218,12 @@ class TelemetryHub:
             devs.append(d)
         return {"type": "snapshot", "devices": devs}
 
-    def add_viewer(self) -> asyncio.Queue:
+    def add_viewer(self):
+        """新增一個觀看端佇列；超過 max_viewers 上限回傳 None（拒絕新連線，
+        沿用 device_hello 的既有慣例：回傳 None 代表拒絕）"""
+        if len(self.viewers) >= self.max_viewers:
+            self.log.warning(f"觀看端數已達上限 {self.max_viewers}，拒絕新連線")
+            return None
         q = asyncio.Queue(maxsize=300)
         self.viewers.add(q)
         self.log.info(f"瀏覽器連入（目前 {len(self.viewers)} 個觀看端）")

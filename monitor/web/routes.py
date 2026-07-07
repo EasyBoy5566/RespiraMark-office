@@ -83,10 +83,14 @@ async def sys_history(request):
 
 async def ws_handler(request):
     hub = request.app["hub"]
+    q = hub.add_viewer()
+    if q is None:
+        raise web.HTTPServiceUnavailable(
+            text='{"error": "觀看端數已達上限，請稍後再試"}',
+            content_type="application/json")
+
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
-
-    q = hub.add_viewer()
     sender = asyncio.create_task(_ws_sender(ws, q))
     try:
         await ws.send_str(json.dumps(hub.snapshot(), ensure_ascii=False))

@@ -122,10 +122,14 @@ async def main():
                        max_devices=int(cfg["max_devices"]),
                        sys_history_max=int(cfg["sys_history_max"]),
                        sys_log_dir=sys_log_dir,
-                       sys_csv_interval=float(cfg["sys_csv_interval"]))
+                       sys_csv_interval=float(cfg["sys_csv_interval"]),
+                       max_viewers=int(cfg["max_viewers"]))
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
                                        token=str(cfg["ingest_token"] or ""),
-                                       ssl_ctx=ssl_ctx)
+                                       ssl_ctx=ssl_ctx,
+                                       max_conns=int(cfg["ingest_max_conns"]),
+                                       hello_timeout=float(cfg["ingest_hello_timeout"]),
+                                       idle_timeout=float(cfg["ingest_idle_timeout"]))
     web_runner = await start_web(hub, int(cfg["web_port"]),
                                  ssl_ctx=ssl_ctx, authmgr=authmgr)
     watchdog = asyncio.ensure_future(hub.watchdog())

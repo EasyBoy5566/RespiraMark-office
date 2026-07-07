@@ -41,6 +41,8 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 
 **存取驗證**：伺服器 `config.json` 設定了 `ingest_token`（非空字串）時，`hello` 必須帶 `token` 欄位且值相符，否則伺服器記 log 後直接斷線；伺服器未設定則忽略此欄位。裝置數達 `max_devices` 上限時，新裝置的 `hello` 一律拒絕（既有裝置重連不受影響）。未啟用 TLS 時 token 走明文 TCP，僅用於院內網隔離閒雜裝置；啟用 TLS（見「傳輸安全」）後 token 才受加密保護。
 
+**連線防護**（防範區網內異常/惡意連線耗盡資源）：同時 TCP 連線數超過 `ingest_max_conns`（預設 64）直接拒絕新連線；連線後 `ingest_hello_timeout`（預設 10 秒）內沒收到合法 `hello` 就斷線；`hello` 通過後 `ingest_idle_timeout`（預設 60 秒）內沒收到任何訊息也斷線（Pi 端本來就每 2 秒送 `ping`，此值留有充裕餘裕）。單行訊息上限 `MAX_LINE`（64KB）；`wave` 的 `p`/`f`/`v`/`trig` 需為等長數值陣列且不超過 2000 筆、`params` 的 `settings`/`measured` 鍵數不超過 200 且字串值不超過 200 字元，格式異常的訊息記 log 後直接捨棄（不斷線，視為裝置端偶發問題）。
+
 | type | 時機 | 欄位 |
 |---|---|---|
 | `hello` | 連線後第一則 | `v` 協議版本、`device` 機台編號（hostname）、`patient` 病人代碼、`token` 存取權杖（見上）、`ts` |
@@ -91,6 +93,8 @@ Pi 端在遙測背景執行緒每 ~5s 取樣一次（純標準庫讀 `/proc`、`
 伺服器超過 `offline_timeout`（預設 5 秒）沒收到任何訊息 → 判定該裝置離線。
 
 ## 第二段：伺服器 → 瀏覽器（WebSocket `/ws`，每則一個 JSON）
+
+同時觀看端（WebSocket 連線）數超過 `max_viewers`（預設 50）時，新連線回 HTTP 503 拒絕。
 
 Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另外產生三種：
 

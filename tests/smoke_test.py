@@ -29,6 +29,10 @@ PY = sys.executable
 WEB_PORT = 18080
 INGEST_PORT = 18765
 TOKEN = "SMOKETOKEN"     # 測試用 ingest_token，驗證 token 驗證路徑
+HELLO_TIMEOUT = 3.0      # 測試用短逾時（正式環境預設 10 秒），加速測試
+IDLE_TIMEOUT = 3.0       # 測試用短逾時（正式環境預設 60 秒）；fake_pi 持續送資料不受影響
+MAX_CONNS = 6            # 3 台 fake_pi 常駐 + 3 名額供本檔測試連線上限
+MAX_VIEWERS = 3          # 測試用小上限，加速驗證觀看端數量限制
 ADMIN_USER = "smokeadmin"
 ADMIN_PASS = "SmokePass123"
 VIEWER_USER = "smokeview"
@@ -102,6 +106,111 @@ async def check_bad_token():
     return closed
 
 
+async def check_hello_timeout():
+    """連上不送任何資料，超過 ingest_hello_timeout 應被伺服器斷線（True = 有被斷線）"""
+    try:
+        reader, writer = await asyncio.open_connection(
+            "localhost", INGEST_PORT, ssl=CLIENT_SSL)
+    except (OSError, ssl.SSLError):
+        return False
+    try:
+        data = await asyncio.wait_for(reader.read(1), timeout=HELLO_TIMEOUT + 2.0)
+        closed = data == b""
+    except asyncio.TimeoutError:
+        closed = False
+    writer.close()
+    return closed
+
+
+async def check_idle_timeout():
+    """送出合法 hello 後不再送任何資料，超過 ingest_idle_timeout 應被斷線"""
+    try:
+        reader, writer = await asyncio.open_connection(
+            "localhost", INGEST_PORT, ssl=CLIENT_SSL)
+    except (OSError, ssl.SSLError):
+        return False
+    line = json.dumps({"type": "hello", "v": 1, "device": "smoke-idle",
+                       "patient": "SMOKEIDLE", "token": TOKEN}) + "\n"
+    writer.write(line.encode("utf-8"))
+    await writer.drain()
+    try:
+        data = await asyncio.wait_for(reader.read(1), timeout=IDLE_TIMEOUT + 2.0)
+        closed = data == b""
+    except asyncio.TimeoutError:
+        closed = False
+    writer.close()
+    return closed
+
+
+async def check_max_conns():
+    """開滿 ingest_max_conns 名額後再開一條，最後一條應立即被拒（EOF）。
+    room 連線用 gather 平行建立（而非逐一 await）：TLS 交握在本機測試環境
+    偶爾要花上一兩秒，逐一序列建立會讓前面的連線在後面的都建好前就先
+    hello 逾時斷線，導致同時連線數永遠衝不到上限、誤判為沒有防護。"""
+    conns = []
+    try:
+        room = MAX_CONNS - 3      # 扣掉 3 台常駐 fake_pi 已佔用的名額
+        conns = list(await asyncio.gather(*[
+            asyncio.open_connection("localhost", INGEST_PORT, ssl=CLIENT_SSL)
+            for _ in range(room)
+        ]))
+        await asyncio.sleep(0.3)  # 讓伺服器來得及把連線數計入
+        r, w = await asyncio.open_connection("localhost", INGEST_PORT, ssl=CLIENT_SSL)
+        try:
+            data = await asyncio.wait_for(r.read(1), timeout=2.0)
+            rejected = data == b""
+        except asyncio.TimeoutError:
+            rejected = False
+        w.close()
+        return rejected
+    finally:
+        for _, w in conns:
+            w.close()
+
+
+async def check_bad_wave_survives():
+    """送格式異常的 wave（超長陣列）：連線應保持存活（訊息被丟棄、不斷線、伺服器不崩潰）"""
+    try:
+        reader, writer = await asyncio.open_connection(
+            "localhost", INGEST_PORT, ssl=CLIENT_SSL)
+    except (OSError, ssl.SSLError):
+        return False
+    hello = json.dumps({"type": "hello", "v": 1, "device": "smoke-badmsg",
+                        "patient": "SMOKEBADMSG", "token": TOKEN}) + "\n"
+    writer.write(hello.encode("utf-8"))
+    await writer.drain()
+    bad_wave = json.dumps({"type": "wave", "p": [0.0] * 3000,
+                           "f": [0.0] * 3000, "v": [0.0] * 3000, "trig": []}) + "\n"
+    writer.write(bad_wave.encode("utf-8"))
+    await writer.drain()
+    try:
+        # 沒被斷線的話，這裡應該逾時（讀不到 EOF），代表連線仍存活
+        data = await asyncio.wait_for(reader.read(1), timeout=1.5)
+        alive = data != b""
+    except asyncio.TimeoutError:
+        alive = True
+    writer.close()
+    return alive
+
+
+async def check_max_viewers(session):
+    """開滿 max_viewers 名額後再開一個，應立即被拒（503）"""
+    conns = []
+    try:
+        for _ in range(MAX_VIEWERS):
+            ws = await session.ws_connect(f"{BASE}/ws")
+            conns.append(ws)
+        try:
+            extra = await session.ws_connect(f"{BASE}/ws")
+            await extra.close()
+            return False
+        except aiohttp.WSServerHandshakeError as e:
+            return e.status == 503
+    finally:
+        for ws in conns:
+            await ws.close()
+
+
 async def collect_ws(session, seconds=4.0):
     msgs = []
     async with session.ws_connect(f"{BASE}/ws") as ws:
@@ -155,6 +264,11 @@ async def run_checks():
     # ── ingest token（走 TLS）───────────────────────────────────────
     check("錯誤 token 被伺服器斷線", await check_bad_token())
 
+    # 注意：W-101/W-102 連線防護測試刻意放在本函式後段（見下方），
+    # 因為它們合計要花數秒等待逾時，若放在這裡會延後下面的 snapshot/alarm
+    # 檢查時間點，而 fake_pi 的警報每 20 秒切換一次觸發/解除，delay 太多會
+    # 剛好跨過切換點導致誤判失敗（曾經因此觸發過一次假警報）。
+
     await asyncio.sleep(2.0)          # 讓 fake_pi 連上並開始送資料
     msgs = await collect_ws(authed, 4.0)
 
@@ -190,6 +304,8 @@ async def run_checks():
         check("波形速率合理（80~120Hz）", 80 <= total / 4.0 <= 120,
               f"{total / 4.0:.0f} 樣本/秒")
 
+    check("觀看端數達上限，新連線被拒（503）", await check_max_viewers(authed))
+
     # 系統狀態（sys）全鏈：即時廣播 → HTTP 歷史端點 → CSV 落地
     sysmsgs = [m for m in msgs if m["type"] == "sys"]
     check("sys 有廣播到瀏覽器", any("cpu" in m for m in sysmsgs),
@@ -206,6 +322,16 @@ async def run_checks():
     ok_csv = os.path.exists(csv_path) and sum(
         1 for _ in open(csv_path, encoding="utf-8")) >= 2
     check("sys 已落地 CSV（含表頭+資料）", ok_csv, csv_path)
+
+    # ── ingest 連線防護（IMPROVEMENT_PLAN.md W-101/W-102）───────────
+    # 放在這裡（而非測試前段）：這幾項合計要等數秒逾時，若放前段會延後
+    # snapshot/alarm 檢查的時間點，而 fake_pi 警報每 20 秒切換一次，
+    # 延誤太多會跨過切換點導致誤判。此時只剩 3 台 fake_pi 常駐連線，
+    # 計算連線數上限時的基準數量穩定。
+    check("連線數達上限，新連線被拒", await check_max_conns())
+    check("等待 hello 逾時被斷線", await check_hello_timeout())
+    check("hello 後閒置逾時被斷線", await check_idle_timeout())
+    check("格式異常訊息被丟棄但連線不斷、伺服器不崩潰", await check_bad_wave_survives())
 
     # ── 管理頁權限（PROTOCOL.md「管理頁」）──────────────────────────
     async with new_session() as s:
@@ -334,6 +460,10 @@ def main():
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump({"ingest_port": INGEST_PORT, "web_port": WEB_PORT,
                    "offline_timeout": 5.0, "ingest_token": TOKEN,
+                   "ingest_max_conns": MAX_CONNS,
+                   "ingest_hello_timeout": HELLO_TIMEOUT,
+                   "ingest_idle_timeout": IDLE_TIMEOUT,
+                   "max_viewers": MAX_VIEWERS,
                    "sys_log_dir": SYS_LOG_DIR,
                    "tls_cert": os.path.join(CERT_DIR, "server.pem"),
                    "tls_key": os.path.join(CERT_DIR, "server.key"),
