@@ -63,7 +63,7 @@ function buildCard(dev) {
       </span>
       <span class="status-group" title="這台 Pi 與中央伺服器之間的網路連線狀態">
         <span class="status-tag">伺服器</span>
-        <span class="link-status off">● 離線</span>
+        <span class="link-status off">離線</span>
       </span>
     </div>
     <div class="metric-grid"></div>
@@ -114,7 +114,7 @@ function sortGrid() {
 function renderCard(dev) {
   const m = dev.lastSys || {};
   const link = dev.card.querySelector(".link-status");
-  link.textContent = dev.online ? "● 連線" : "● 離線";
+  link.textContent = dev.online ? "連線" : "離線";
   link.className = `link-status ${dev.online ? "on" : "off"}`;
 
   // Pi 離線後呼吸器連線狀態已不可信（斷線前的舊資料），清空避免顯示矛盾；

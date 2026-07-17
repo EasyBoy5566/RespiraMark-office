@@ -130,7 +130,7 @@ def run_session(args, model, sysmodel):
         hello["token"] = args.token
     send_lines(sock, [
         hello,
-        {"type": "status", "state": "connected", "msg": "已連線（模擬）"},
+        {"type": "status", "state": "connected", "msg": "已連線"},
         {"type": "device_info", "info": {"id": "5030", "name": "Savina 300 (Fake)",
                                          "revision": "9.99", "medibus": "6.00"}},
         model.params(),
