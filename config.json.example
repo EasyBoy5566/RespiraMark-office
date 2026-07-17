@@ -25,5 +25,6 @@
     "ldap_server": "ldaps://ad.example.org",
     "ldap_bind_template": "{username}@example.org",
     "ldap_use_ssl": true,
+    "ldap_ca": "certs/hospital-ca.pem",
     "ldap_timeout": 5.0
 }

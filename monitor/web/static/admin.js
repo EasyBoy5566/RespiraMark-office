@@ -3,7 +3,8 @@
  *   CPU / 記憶體 / 溫度 / 磁碟 / 降頻 / 開機時長
  * - 點「趨勢」在卡片內就地展開系統狀態趨勢圖（RMSys 共用繪圖，與儀表板同一套門檻）
  * - 移除離線裝置（DELETE /api/admin/devices）、下載長期 sys CSV、帳號唯讀清單
- * - 資料來源與儀表板相同：WebSocket /ws（本頁忽略波形等臨床訊息，只用 sys/link）
+ * - 連線狀態（呼吸器序列埠 status / 伺服器 link）顯示在卡片標題列（儀表板不再顯示）
+ * - 資料來源與儀表板相同：WebSocket /ws（本頁忽略波形等臨床訊息，只用 sys/link/status）
  */
 "use strict";
 
@@ -56,7 +57,14 @@ function buildCard(dev) {
     <div class="admin-card-head">
       <span class="dev-name"></span>
       <span class="spacer"></span>
-      <span class="link-status off">● 離線</span>
+      <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
+        <span class="status-tag">呼吸器</span>
+        <span class="vent-status">—</span>
+      </span>
+      <span class="status-group" title="這台 Pi 與中央伺服器之間的網路連線狀態">
+        <span class="status-tag">伺服器</span>
+        <span class="link-status off">● 離線</span>
+      </span>
     </div>
     <div class="metric-grid"></div>
     <div class="admin-card-info"></div>
@@ -108,6 +116,14 @@ function renderCard(dev) {
   const link = dev.card.querySelector(".link-status");
   link.textContent = dev.online ? "● 連線" : "● 離線";
   link.className = `link-status ${dev.online ? "on" : "off"}`;
+
+  // Pi 離線後呼吸器連線狀態已不可信（斷線前的舊資料），清空避免顯示矛盾；
+  // 重新上線時 Pi 會再送 status，屆時 onStatus 會補回
+  if (!dev.online) {
+    const vent = dev.card.querySelector(".vent-status");
+    vent.className = "vent-status";
+    vent.textContent = "—";
+  }
 
   for (const metric of RMSys.METRICS) {
     const v = m[metric.key];
@@ -256,6 +272,12 @@ function onSys(dev, m) {
   renderCard(dev);
 }
 
+function onStatus(dev, m) {
+  const el = dev.card.querySelector(".vent-status");
+  el.textContent = m.msg || m.state || "—";
+  el.className = `vent-status ${m.state || ""}`;
+}
+
 function dispatch(m) {
   if (m.type === "snapshot") {
     for (const d of m.devices || []) {
@@ -263,6 +285,7 @@ function dispatch(m) {
       dev.online = !!d.online;
       if (d.sys) onSys(dev, d.sys);
       else renderCard(dev);
+      if (d.status && dev.online) onStatus(dev, d.status);
     }
     return;
   }
@@ -274,6 +297,8 @@ function dispatch(m) {
     renderCard(dev);
   } else if (m.type === "sys") {
     onSys(ensureDev(m.device), m);
+  } else if (m.type === "status") {
+    onStatus(ensureDev(m.device), m);
   }
   // 其餘類型（wave/params/alarm…）：管理頁不顯示，忽略
 }

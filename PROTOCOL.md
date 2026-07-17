@@ -20,7 +20,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 **瀏覽器登入**（`auth_enabled`，預設啟用）：`/`、`/ws`、`/history/*`、`/api/me` 皆需登入 session（HttpOnly cookie；閒置逾時 `session_idle_minutes`，0 = 不逾時）。角色分 `viewer`（看板）與 `admin`（含管理頁）。驗證為可抽換介面（`monitor/web/auth.py` 的 `AuthManager` 依賴注入 authenticator），由 `config.json` 的 `auth_backend` 決定：
 
 - `"local"`（預設）：帳號存伺服器 `accounts.json`（**不進 git**；`tools/make_user.py` 建立/刪除，密碼僅存 PBKDF2 雜湊）。本系統**不提供改密碼功能**（自助改密碼與管理員重設皆無），忘記密碼須管理員在伺服器重新執行 `tools/make_user.py`。
-- `"ldap"`：登入時把帳密現場交給醫院 LDAP/AD 做一次 bind 驗證，密碼完全不落地本機，改密碼請走醫院 HIS 既有流程（見 `monitor/web/ldap_auth.py` 開頭說明）。角色（viewer/admin）仍由本機 `accounts.json` 的白名單決定（`password` 欄位此模式下不會被讀取），不是由 AD 群組決定。相關設定：`ldap_server`（如 `ldaps://ad.example.org`）、`ldap_bind_template`（如 `"{username}@example.org"`）、`ldap_use_ssl`、`ldap_timeout`。LDAP 連不上一律視為驗證失敗（fail closed），不會退回本機密碼比對。
+- `"ldap"`：登入時把帳密現場交給醫院 LDAP/AD 做一次 bind 驗證，密碼完全不落地本機，改密碼請走醫院 HIS 既有流程（見 `monitor/web/ldap_auth.py` 開頭說明）。角色（viewer/admin）仍由本機 `accounts.json` 的白名單決定（`password` 欄位此模式下不會被讀取），不是由 AD 群組決定。相關設定：`ldap_server`（如 `ldaps://ad.example.org`）、`ldap_bind_template`（如 `"{username}@example.org"`）、`ldap_use_ssl`、`ldap_ca`（院內 CA 根憑證檔——設定後 ldaps 連線以 `CERT_REQUIRED` 驗證 AD 伺服器憑證，防冒充；未設定則只加密不驗證並於啟動時警告，**正式環境必填**）、`ldap_timeout`。LDAP 連不上一律視為驗證失敗（fail closed），不會退回本機密碼比對。
 
 連續登入失敗會暫時鎖定該來源 IP（兩種 backend 皆適用）。
 

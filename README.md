@@ -116,6 +116,13 @@ python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩
 日誌的時間戳記不可信、事後回溯對不上。部署時請跟資訊室確認院內 NTP 伺服器位址，
 Windows 端用 `w32tm /query /status` 確認已同步，Pi 端用 `timedatectl` 確認。
 
+**院內 CA 簽發憑證（部署醫院時建議走這條）**：若院方統一由資訊室簽發憑證（多數醫院
+如此，到期前會公告提醒申請），直接把核發的伺服器憑證與私鑰掛到 `tls_cert`/`tls_key`，
+並向資訊室索取**院內 CA 根憑證檔**（公開檔案）——發到每台 Pi 的 `telemetry.json`
+（`tls_ca`），以及本伺服器 `config.json` 的 `ldap_ca`（ldaps 驗證 AD 用）。申請伺服器
+憑證時用之後大家實際連的**內部 DNS 名稱**（SAN 建議一併含 IP）。此模式不需要
+`make_certs.py` 與 `ca.key`，下段僅適用自建 CA。
+
 **ca.key（CA 發證私鑰）**：`tools/make_certs.py` 產生的 `certs/ca.key` 不應該長駐伺服器
 ——簽完伺服器憑證後複製兩份到離線 USB，然後從伺服器上刪除；下次要重簽憑證（例如換
 IP）時再暫時取回，簽完立刻再次移除。被拿走等於能簽出任何受信任憑證，風險等同外洩

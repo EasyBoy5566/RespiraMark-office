@@ -15,13 +15,12 @@
   --green:  #00C853;
   --amber:  #FFB300;
   --red:    #FF1744;
-  --c-pressure: #4FC3F7;
-  --c-flow:     #00E5FF;
-  --c-volume:   #76FF03;
+  --c-wave:     #2F80ED;                    /* 波形統一單色（Primary Blue） */
   --grid:       #24364F;                    /* 波形零線/格線 */
   --trig:       rgba(255, 234, 0, 0.55);    /* Trigger 標記（#FFEA00 半透明） */
-  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 警報列底色（level 1 危及生命） */
-  --warn-bg:    rgba(255, 179, 0, 0.12);    /* 警報列底色（level 2 可能危及生命） */
+  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 離線 header 底色 / 危險鈕 hover */
+  --on-red:     #FFFFFF;                     /* 警報色頂端列上的文字（紅底） */
+  --on-amber:   #0B1320;                     /* 警報色頂端列上的文字（深色主題亮黃底 → 深字） */
   --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
   --sys-line:   #56A6FF;                     /* 系統狀態趨勢折線 */
   --blue:       #2F80ED;                     /* Primary Medical Blue（官方色盤） */
@@ -43,13 +42,12 @@
   --green:  #00913C;
   --amber:  #B26E00;
   --red:    #D50000;
-  --c-pressure: #0277BD;
-  --c-flow:     #00838F;
-  --c-volume:   #33691E;
+  --c-wave:     #0277BD;                    /* 白底改用深一階藍，對比較足 */
   --grid:       #C3CFDE;
   --trig:       rgba(191, 144, 0, 0.6);
   --alarm-bg:   rgba(213, 0, 0, 0.08);
-  --warn-bg:    rgba(178, 110, 0, 0.10);
+  --on-red:     #FFFFFF;
+  --on-amber:   #FFFFFF;                     /* 淺色主題琥珀色較深（#B26E00）→ 白字 */
   --overlay-bg: rgba(237, 241, 247, 0.96);
   --sys-line:   #0277BD;
   --blue:       #1C6ED5;                     /* 淺色底用 Active Blue，對比較足 */
@@ -163,27 +161,51 @@ main#grid {
 .link-status.on  { color: var(--green); }
 .link-status.off { color: var(--red); }
 
-/* ── 警報列（無警報時隱藏；資料由 alarm 訊息驅動，分級見 alarm_levels.js）───
- * 底色/邊線依目前最嚴重等級變化；level 3（不影響生命）維持中性色，
- * 不觸發卡片警示外框（見下方 .card.alarming-*，故意沒有 -3 版本）*/
-.alarm-bar {
-  display: flex; flex-wrap: wrap; gap: 4px 16px;
-  padding: 5px 12px;
-  font-size: 14px;
-  border-bottom: 1px solid var(--divider);
+/* ── 警報（狀態列中央置中；資料由 alarm 訊息驅動，分級見 alarm_levels.js）───
+ * 嚴重度以整張卡的警示外框 + 頂端列底色呈現（.card.alarming-*，故意沒有 -3 版本）；
+ * level 3（不影響生命）不觸發外框/底色，只在列表中以中性色顯示 */
+.head-alarms {
+  display: inline-flex; flex-wrap: wrap; gap: 2px 12px;
+  justify-content: center;
+  font-size: 13px;
 }
-.alarm-bar.lvl-1 { background: var(--alarm-bg); border-bottom-color: var(--red); }
-.alarm-bar.lvl-2 { background: var(--warn-bg); border-bottom-color: var(--amber); }
 
 .alarm-item { font-weight: bold; white-space: nowrap; }
 .alarm-item.lvl-1 { color: var(--red); }
 .alarm-item.lvl-2 { color: var(--amber); }
 .alarm-item.lvl-3 { color: var(--sys-line); font-weight: normal; }
 
-.card.alarming-1 { border-color: var(--red); }
-.card.alarming-1 .card-head { border-left: 4px solid var(--red); }
-.card.alarming-2 { border-color: var(--amber); }
-.card.alarming-2 .card-head { border-left: 4px solid var(--amber); }
+/* 靜音鈕（卡片右上角常駐）：按一次靜音該卡片警報音 2 分鐘（倒數顯示），再按取消。
+ * 寬高皆固定 + flex 置中：「🔔 靜音」（中文）與「🔕 m:ss」（數字）行高不同，
+ * 只固定寬度高度仍會跳動，因此尺寸與字形 metrics 完全脫鉤 */
+.mute-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 76px; height: 22px;
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 12px; font-weight: bold;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;   /* 倒數數字不跳動 */
+}
+.mute-btn:hover { border-color: var(--hover); }
+.mute-btn.muted { color: var(--text-label); border-style: dashed; }
+
+/* 警示外框 + 頂端列同色（離線時 Pi 資料已不可信，維持離線樣式優先，故 :not）；
+ * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber）確保可讀 */
+.card.alarming-1 { border-color: var(--red); border-width: 2px; }
+.card.alarming-2 { border-color: var(--amber); border-width: 2px; }
+.card.alarming-1:not(.pi-offline) .card-head { background: var(--red); }
+.card.alarming-2:not(.pi-offline) .card-head { background: var(--amber); }
+.card.alarming-1:not(.pi-offline) .card-head .dev-name,
+.card.alarming-1:not(.pi-offline) .card-head .patient,
+.card.alarming-1:not(.pi-offline) .card-head .alarm-item { color: var(--on-red); }
+.card.alarming-2:not(.pi-offline) .card-head .dev-name,
+.card.alarming-2:not(.pi-offline) .card-head .patient,
+.card.alarming-2:not(.pi-offline) .card-head .alarm-item { color: var(--on-amber); }
 
 /* ── 波形區 ─────────────────────────────────────────────── */
 .waves { padding: 4px 8px 2px; }
@@ -198,19 +220,15 @@ main#grid {
 .wave-label {
   position: absolute; top: 2px; left: 7px;
   font-size: 11px; font-weight: bold; pointer-events: none;
+  color: var(--c-wave);
 }
-.wave-label.p { color: var(--c-pressure); }
-.wave-label.f { color: var(--c-flow); }
-.wave-label.v { color: var(--c-volume); }
 .wave-val {
   position: absolute; top: 2px; right: 8px;
   font-size: 13px; font-weight: bold;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+  color: var(--c-wave);
 }
-.wave-val.p { color: var(--c-pressure); }
-.wave-val.f { color: var(--c-flow); }
-.wave-val.v { color: var(--c-volume); }
 
 /* ── 參數列（卡片模式：顯示呼吸器設定值）────────────────── */
 .strip-cap {

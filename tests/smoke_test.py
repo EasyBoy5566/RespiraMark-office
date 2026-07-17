@@ -292,8 +292,12 @@ async def run_checks():
             "username": ADMIN_USER, "password": ADMIN_PASS}) as r:
         check("正確帳密登入 → 進入儀表板", r.status == 200 and r.url.path == "/")
         dash_html = await r.text()
-        check("儀表板含離線提示音開關（IMPROVEMENT_PLAN.md W-304）",
-              'id="soundToggle"' in dash_html)
+        check("儀表板已無離線提示音開關（改為呼吸器警報音，見 CHANGELOG）",
+              'id="soundToggle"' not in dash_html)
+    async with authed.get(f"{BASE}/static/app.js") as r:
+        app_js = await r.text() if r.status == 200 else ""
+        check("前端含呼吸器警報音與卡片靜音鈕",
+              "mute-btn" in app_js and "unlockAudio" in app_js)
     async with authed.get(f"{BASE}/api/me") as r:
         me = await r.json() if r.status == 200 else {}
         check("/api/me 回報登入者與角色",

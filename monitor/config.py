@@ -46,6 +46,8 @@ DEFAULTS = {
     "ldap_server": "",             # 例如 "ldaps://ad.csh.org.tw"（含 scheme；用 ldaps:// 走加密）
     "ldap_bind_template": "{username}@example.com",  # 帳號套進這個樣板直接當 bind DN，例如 UPN 格式
     "ldap_use_ssl": True,
+    "ldap_ca": "",                 # 院內 CA 根憑證檔，例如 "certs/hospital-ca.pem"——用來驗證 AD 伺服器憑證；
+                                   # 空字串 = 只加密不驗證（啟動時會警告），正式環境必填
     "ldap_timeout": 5.0,           # 秒，LDAP 連線/驗證逾時
 }
 

@@ -18,6 +18,7 @@ monkeypatch 把 ldap_auth.ldap3.Connection 換成一個工廠函式，每次呼�
 
 import json
 import os
+import ssl
 import sys
 import tempfile
 import unittest
@@ -116,6 +117,55 @@ class LdapAuthenticatorTest(unittest.TestCase):
             roles_path=os.path.join(self.tmp.name, "does-not-exist.json"))
         self.assertFalse(auth.has_users())
         self.assertIsNone(auth.authenticate("alice", "CorrectPass1"))
+
+
+class LdapTlsConfigTest(unittest.TestCase):
+    """ldap_ca（院內 CA 根憑證）→ ldaps 伺服器憑證驗證設定是否正確帶給 ldap3"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.roles_path = os.path.join(self.tmp.name, "accounts.json")
+        _write_roles(self.roles_path, [{"username": "alice", "role": "admin"}])
+        # ldap3.Tls 在建構時只檢查 CA 檔存在與否（內容於實際連線才使用），
+        # 測試不建立真連線，放一個假 PEM 即可
+        self.ca_path = os.path.join(self.tmp.name, "hospital-ca.pem")
+        with open(self.ca_path, "w", encoding="utf-8") as f:
+            f.write("-----BEGIN CERTIFICATE-----\ndummy\n-----END CERTIFICATE-----\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _auth(self, **kw):
+        return ldap_auth.LdapAuthenticator(
+            server_uri="ldaps://mock-server",
+            bind_template="cn={username},dc=example,dc=org",
+            roles_path=self.roles_path, **kw)
+
+    def test_ca_file_enables_cert_required_validation(self):
+        auth = self._auth(ca_certs_file=self.ca_path)
+        with mock.patch("monitor.web.ldap_auth.ldap3.Server") as server_cls, \
+             mock.patch("monitor.web.ldap_auth.ldap3.Connection") as conn_cls:
+            conn_cls.return_value.bind.return_value = True
+            self.assertTrue(auth._bind_ok("alice", "pw"))
+            tls = server_cls.call_args.kwargs["tls"]
+            self.assertIsNotNone(tls)
+            self.assertEqual(tls.validate, ssl.CERT_REQUIRED)
+            self.assertEqual(tls.ca_certs_file, self.ca_path)
+
+    def test_no_ca_file_keeps_previous_behaviour(self):
+        """未設定 ldap_ca → 不帶 Tls 物件（只加密不驗證，啟動時已有警告）"""
+        auth = self._auth()
+        with mock.patch("monitor.web.ldap_auth.ldap3.Server") as server_cls, \
+             mock.patch("monitor.web.ldap_auth.ldap3.Connection") as conn_cls:
+            conn_cls.return_value.bind.return_value = True
+            self.assertTrue(auth._bind_ok("alice", "pw"))
+            self.assertIsNone(server_cls.call_args.kwargs["tls"])
+
+    def test_missing_ca_file_fails_closed_without_raising(self):
+        """CA 檔路徑設錯 → ldap3.Tls 建構就拋例外 → 驗證失敗，不能讓例外炸到登入路由"""
+        auth = self._auth(ca_certs_file=os.path.join(self.tmp.name, "no-such-ca.pem"))
+        self.assertFalse(auth._bind_ok("alice", "pw"))
+        self.assertIsNone(auth.authenticate("alice", "pw"))
 
 
 class LdapAuthenticatorMissingDependencyTest(unittest.TestCase):

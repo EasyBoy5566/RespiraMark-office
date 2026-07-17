@@ -2,8 +2,11 @@
  * - WebSocket 接收各 Pi 的波形/參數/警報，自動重連
  * - 播放引擎：取樣率由「發送端時間戳」估計（不受網路抖動影響）；
  *   緩衝偏離目標時以 ±15% 微調播放速率，永不暫停 → 波形連續
- * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）
- * - 小卡片：三條波形 + 模式 + 設定值 + 警報列；點開顯示所有量測值
+ * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）；
+ *   放大/縮回/換主題時從歷史重播並接續原掃描位置（不從左端重畫）
+ * - 小卡片：三條波形（統一單色）+ 設定值；警報直接顯示在狀態列右側；點開顯示所有量測值
+ * - 連線狀態（呼吸器/伺服器）移到管理頁 /admin 顯示；本頁 Pi 離線以紅框呈現
+ * - 警報音：呼吸器發出 level 1/2 警報時鳴響（Web Audio 合成）；右上角靜音鈕按一次靜音 2 分鐘
  * - 深/淺色主題：顏色一律讀 style.css 的 CSS 變數，切換時從歷史重播波形
  * - 登入顯示在 auth.js；Pi 機器健康狀態只在管理頁（/admin）顯示，本頁忽略 sys
  */
@@ -11,9 +14,9 @@
 
 // ── 常數（沿用 Pi 端 WaveformConfig；繪圖顏色由 refreshThemeColors 填入）──
 const CHANNELS = [
-  { key: "p", label: "Paw cmH₂O", colorVar: "--c-pressure", color: "", min: -5,  max: 45,   zero: 0 },
-  { key: "f", label: "Flow L/min", colorVar: "--c-flow",     color: "", min: -50, max: 50,   zero: 0 },
-  { key: "v", label: "Vol mL",     colorVar: "--c-volume",   color: "", min: 0,   max: 1000, zero: 0 },
+  { key: "p", label: "Paw cmH₂O", colorVar: "--c-wave", color: "", min: -5,  max: 45,   zero: 0 },
+  { key: "f", label: "Flow L/min", colorVar: "--c-wave", color: "", min: -50, max: 50,   zero: 0 },
+  { key: "v", label: "Vol mL",     colorVar: "--c-wave", color: "", min: 0,   max: 1000, zero: 0 },
 ];
 
 const WINDOW_SEC = 20;      // 波形視窗寬度（秒）
@@ -21,6 +24,7 @@ const GAP_SEC    = 0.5;     // 擦除條寬度（秒）
 const TARGET_BUF = 1.2;     // 目標緩衝深度（秒）：吸收院內/訪客網路的卡頓（以延遲換連續）
 const MAX_BUF    = 4.0;     // 緩衝上限（秒）：分頁背景太久直接跳到最新
 const RATE_WIN   = 6.0;     // 秒，取樣率估計的滑動視窗（用發送端 ts）
+const MUTE_SEC   = 120;     // 靜音鈕：按一次靜音的秒數（再按一次取消）
 let TRIG_COLOR = "";        // 依主題由 refreshThemeColors() 填入
 let GRID_COLOR = "";
 
@@ -59,39 +63,73 @@ let initTheme = "dark";
 try { initTheme = localStorage.getItem("rm-theme") || "dark"; } catch (e) { /* 同上 */ }
 applyTheme(initTheme);
 
-// ── 裝置離線提示音（預設關，設定存 localStorage；IMPROVEMENT_PLAN.md W-304）──
-const soundBtn = document.getElementById("soundToggle");
-let offlineSoundOn = false;
-try { offlineSoundOn = localStorage.getItem("rm-offline-sound") === "1"; } catch (e) { /* 同上 */ }
+// ── 呼吸器警報音（呼吸器發出 level 1/2 警報時鳴響；靜音鈕在卡片右上角）──
+// 純 Web Audio 合成短嗶聲（零相依、不用音檔）。瀏覽器自動播放政策要求
+// 使用者先與頁面互動過才可出聲，故以首次點擊/按鍵解鎖共用 AudioContext；
+// 解鎖前只有視覺警示（狀態列警報 + 卡片警示外框），不影響任何功能。
+let audioCtx = null;
 
-function applySoundBtn() {
-  soundBtn.textContent = offlineSoundOn ? "🔔 離線提示音" : "🔕 離線提示音";
-  soundBtn.classList.toggle("active", offlineSoundOn);
-}
-soundBtn.addEventListener("click", () => {
-  offlineSoundOn = !offlineSoundOn;
-  try { localStorage.setItem("rm-offline-sound", offlineSoundOn ? "1" : "0"); } catch (e) { /* 同上 */ }
-  applySoundBtn();
-});
-applySoundBtn();
-
-/** 純 Web Audio 產生的短嗶聲（不用外部音檔，零相依）；瀏覽器不支援或
- * 被自動播放政策擋下時靜默忽略，不影響任何功能 */
-function playOfflineBeep() {
-  if (!offlineSoundOn) return;
+function unlockAudio() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.25);
-    osc.onended = () => ctx.close();
-  } catch (e) { /* 靜默忽略 */ }
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) { /* 不支援 Web Audio → 維持純視覺警示 */ }
 }
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
+
+function beep(freq, at, dur) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.18, at);
+  gain.gain.setTargetAtTime(0.0001, at + dur - 0.03, 0.01);
+  osc.start(at);
+  osc.stop(at + dur);
+  osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+}
+
+function isMuted(dev) {
+  return Date.now() < dev.muteUntil;
+}
+
+/** 右上角靜音鈕外觀：靜音中顯示剩餘倒數，時間到自動復歸（由下方 300ms 迴圈驅動） */
+function updateMuteBtn(dev) {
+  const left = dev.muteUntil - Date.now();
+  if (left > 0) {
+    const s = Math.ceil(left / 1000);
+    dev.muteBtn.textContent = `🔕 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    dev.muteBtn.classList.add("muted");
+  } else {
+    dev.muteBtn.textContent = "🔔 靜音";
+    dev.muteBtn.classList.remove("muted");
+  }
+}
+
+// 取所有「線上、未靜音、有 level 1/2 警報」裝置中最嚴重的等級鳴響：
+// level 1（危及生命）三連短高音、週期短；level 2 兩連低音、週期長。
+// Pi 離線後警報資料已不可信，不列入鳴響（畫面仍以離線紅框提示）。
+let lastBeepAt = 0;
+setInterval(() => {
+  let worst = 0;
+  for (const dev of devices.values()) {
+    updateMuteBtn(dev);
+    if (!dev.online || isMuted(dev) || !dev.alarmLevel) continue;
+    if (!worst || dev.alarmLevel < worst) worst = dev.alarmLevel;
+  }
+  if (!worst) { lastBeepAt = 0; return; }
+  if (!audioCtx || audioCtx.state !== "running") return;   // 尚未解鎖
+  const now = Date.now() / 1000;
+  if (now - lastBeepAt < (worst === 1 ? 2.5 : 5.0)) return;
+  lastBeepAt = now;
+  try {
+    const t = audioCtx.currentTime + 0.02;
+    if (worst === 1) { beep(988, t, 0.16); beep(988, t + 0.24, 0.16); beep(988, t + 0.48, 0.16); }
+    else { beep(660, t, 0.2); beep(660, t + 0.35, 0.2); }
+  } catch (e) { /* 靜默忽略 */ }
+}, 300);
 
 // ── 裝置物件與卡片 ───────────────────────────────────────────────
 function ensureDev(id) {
@@ -108,6 +146,10 @@ function ensureDev(id) {
     valThrottle: 0,
     big: false,
     card: null,
+    online: false,        // Pi ↔ 伺服器連線（由 link 訊息維護）
+    alarmLevel: 0,        // 目前最嚴重警報等級（0 = 無 level 1/2 警報）
+    muteUntil: 0,         // 靜音截止時間戳（ms）；按一次靜音 MUTE_SEC 秒，再按取消
+    muteBtn: null,        // 右上角靜音鈕（buildCard 填入）
   };
   buildCard(dev);
   devices.set(id, dev);
@@ -125,29 +167,29 @@ function buildCard(dev) {
       <span class="dev-name"></span>
       <span class="patient"></span>
       <span class="spacer"></span>
-      <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
-        <span class="status-tag">呼吸器</span>
-        <span class="vent-status">—</span>
-      </span>
-      <span class="status-group" title="這台 Pi 與中央伺服器之間的網路連線狀態">
-        <span class="status-tag">伺服器</span>
-        <span class="link-status off">● 離線</span>
-      </span>
+      <span class="head-alarms"></span>
+      <span class="spacer"></span>
+      <button class="mute-btn" type="button"
+              title="靜音這台裝置的警報音 2 分鐘（再按一次取消）">🔔 靜音</button>
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
-    <div class="alarm-bar hidden"></div>
     <div class="waves"></div>
     <div class="strip-cap">設定值</div>
     <div class="param-strip"></div>
     <div class="detail">
       <div><h3>量測值</h3><div class="kv-table measured"></div></div>
       <div>
-        <h3>設定值</h3><div class="kv-table settings"></div>
         <h3>模式</h3><div class="mode-line" style="font-size:14px"></div>
         <div class="dev-info-line"></div>
       </div>
     </div>`;
   card.querySelector(".dev-name").textContent = dev.id;
+  dev.muteBtn = card.querySelector(".mute-btn");
+  dev.muteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();               // 不觸發卡片放大
+    dev.muteUntil = isMuted(dev) ? 0 : Date.now() + MUTE_SEC * 1000;
+    updateMuteBtn(dev);
+  });
 
   const waves = card.querySelector(".waves");
   for (const ch of CHANNELS) {
@@ -202,6 +244,7 @@ function collapse(dev) {
 // ── Canvas 初始化與重繪（尺寸改變時從歷史重播）───────────────────
 function setupCanvases(dev) {
   const dpr = window.devicePixelRatio || 1;
+  const oldPos = dev.pos;    // 重播後接續原掃描位置用（放大/縮回/換主題不從頭畫）
   dev.pos = 0;
   for (let i = 0; i < CHANNELS.length; i++) {
     const c = dev.chans[i];
@@ -216,9 +259,15 @@ function setupCanvases(dev) {
     c.ctx.clearRect(0, 0, c.w, c.h);
     drawZeroLine(c, CHANNELS[i], 0, c.w);
   }
-  // 從歷史重播，畫面不留白
+  // 從歷史重播，畫面不留白。掃描位置接續 resize/放大前的位置：
+  // 從「原位置往回推 n 個樣本」處起畫，重播完剛好回到原位置，
+  // 波形繼續往前掃而不是從左端重新開始（畫到一半突然歸零很干擾判讀）
   const n = dev.chans[0].hist.length;
   if (n) {
+    const period = WINDOW_SEC * dev.rate;    // 掃描一輪的樣本數
+    let start = (oldPos - n) % period;
+    if (start < 0) start += period;
+    dev.pos = start;
     const hist = dev.chans.map((c) => c.hist);
     const samples = new Array(n);
     for (let s = 0; s < n; s++) {
@@ -378,32 +427,14 @@ function onWave(dev, m) {
 }
 
 function onLink(dev, m) {
-  const el = dev.card.querySelector(".link-status");
-  if (m.online) {
-    dev.card.classList.remove("pi-offline");
-    el.className = "link-status on";
-    el.textContent = "已連線";
-    if (m.patient !== undefined) setPatient(dev, m.patient);
-  } else {
-    if (!dev.card.classList.contains("pi-offline")) playOfflineBeep();  // 只在剛離線那一刻響
-    dev.card.classList.add("pi-offline");
-    el.className = "link-status off";
-    el.textContent = "離線";
-    // Pi 離線後呼吸器連線狀態已不可信（斷線前的舊資料），清空避免顯示矛盾
-    const vent = dev.card.querySelector(".vent-status");
-    vent.className = "vent-status";
-    vent.textContent = "—";
-  }
+  // 文字版連線狀態（呼吸器/伺服器）在管理頁 /admin；本頁只以紅框呈現離線
+  dev.online = !!m.online;
+  dev.card.classList.toggle("pi-offline", !dev.online);
+  if (m.online && m.patient !== undefined) setPatient(dev, m.patient);
 }
 
 function setPatient(dev, patient) {
   dev.card.querySelector(".patient").textContent = patient ? `病歷號: ${patient}` : "";
-}
-
-function onStatus(dev, m) {
-  const el = dev.card.querySelector(".vent-status");
-  el.textContent = m.msg || m.state;
-  el.className = `vent-status ${m.state || ""}`;
 }
 
 function onParams(dev, m) {
@@ -411,8 +442,15 @@ function onParams(dev, m) {
   dev.card.querySelector(".mode-line").textContent = mode || "—";
 
   // 通氣模式本質上也是一種設定值（跟 PEEP、RR 一樣是醫護會查看的呼吸器設定），
-  // 放在設定值清單最前面（小卡片格子與放大檢視的設定值表格都會顯示）
-  const settings = mode ? { Mode: mode, ...(m.settings || {}) } : (m.settings || {});
+  // 放在設定值清單最前面
+  const settings = mode ? { Mode: mode, ...(m.settings || {}) } : { ...(m.settings || {}) };
+
+  // VC（容積控制）類模式的 VTi 以 mL 呈現：MEDIBUS 給的是公升（如 0.450），
+  // 臨床慣用 450 mL。已是 mL 量級（≥10）的值不動，避免重複換算。
+  if (/\bVC/.test(mode) && settings.VTi !== undefined) {
+    const litres = parseFloat(settings.VTi);
+    if (!isNaN(litres) && litres < 10) settings.VTi = `${Math.round(litres * 1000)}`;
+  }
 
   // 小卡片參數列 = 設定值（動態依收到的項目建立）
   const strip = dev.card.querySelector(".param-strip");
@@ -425,34 +463,36 @@ function onParams(dev, m) {
     chip.querySelector(".val").textContent = v;
     strip.appendChild(chip);
   }
-  // 放大檢視：所有量測值 + 設定值
+  // 放大檢視：所有量測值（設定值不重複列表——小卡參數列在放大時仍看得到）
   fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
-  fillTable(dev.card.querySelector(".kv-table.settings"), settings);
 }
 
 function onAlarm(dev, m) {
   // 全量更新：alarms 為目前所有警報（空陣列 = 解除）。
   // 依分級（RMAlarm，見 alarm_levels.js）由重到輕排序，同級再依 MEDIBUS 優先級高→低。
+  // 顯示在狀態列右側；嚴重度以整張卡的警示外框呈現（.card.alarming-*）。
   const alarms = (m.alarms || [])
     .map((a) => Object.assign({}, a, RMAlarm.classify(a)))
     .sort((a, b) => (a.level - b.level) || ((b.prio || 0) - (a.prio || 0)));
 
-  const bar = dev.card.querySelector(".alarm-bar");
-  bar.innerHTML = "";
-  bar.className = "alarm-bar hidden";
+  const box = dev.card.querySelector(".head-alarms");
+  box.innerHTML = "";
   // level 3（不影響生命）不觸發卡片警示外框，只在列表中以淡藍顯示
   dev.card.classList.remove("alarming-1", "alarming-2");
+  dev.alarmLevel = 0;
   if (!alarms.length) return;
 
   for (const a of alarms) {
     const item = document.createElement("span");
     item.className = `alarm-item lvl-${a.level}`;
     item.textContent = `${a.level === 3 ? "•" : "⚠"} ${a.name}`;
-    bar.appendChild(item);
+    box.appendChild(item);
   }
   const worst = alarms[0].level;      // 已依分級排序，第一筆就是目前最嚴重的等級
-  bar.className = `alarm-bar lvl-${worst}`;
-  if (worst <= 2) dev.card.classList.add(`alarming-${worst}`);
+  if (worst <= 2) {
+    dev.card.classList.add(`alarming-${worst}`);
+    dev.alarmLevel = worst;           // 有 level 1/2 才鳴響（level 3 只有視覺）
+  }
 }
 
 function fillTable(el, obj) {
@@ -485,12 +525,13 @@ function onDeviceRemoved(id) {
 }
 
 // 訊息類型 → 處理函式（新增有狀態類型：加一行 + 寫 onXxx，snapshot 自動生效）
-// 注意：sys（Pi 機器健康狀態）只在管理頁顯示，本頁刻意不註冊 → 走未知類型忽略
+// 注意：sys（Pi 機器健康狀態）與 status（呼吸器連線狀態）只在管理頁顯示，
+// 本頁刻意不註冊 → 走未知類型忽略
 const MSG_HANDLERS = {
-  wave: onWave, link: onLink, status: onStatus,
+  wave: onWave, link: onLink,
   params: onParams, device_info: onDeviceInfo, alarm: onAlarm,
 };
-const SNAPSHOT_KEYS = ["status", "params", "device_info", "alarm"];
+const SNAPSHOT_KEYS = ["params", "device_info", "alarm"];
 
 function dispatch(m) {
   if (m.type === "snapshot") {

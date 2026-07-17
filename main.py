@@ -64,7 +64,8 @@ def build_authenticator(cfg: dict):
             bind_template=str(cfg.get("ldap_bind_template") or "{username}"),
             roles_path=_resolve(str(cfg.get("accounts_file") or "accounts.json")),
             use_ssl=bool(cfg.get("ldap_use_ssl", True)),
-            timeout=float(cfg.get("ldap_timeout") or 5.0))
+            timeout=float(cfg.get("ldap_timeout") or 5.0),
+            ca_certs_file=_resolve(str(cfg.get("ldap_ca") or "")))
     return LocalAuthenticator(_resolve(str(cfg.get("accounts_file") or "accounts.json")))
 
 

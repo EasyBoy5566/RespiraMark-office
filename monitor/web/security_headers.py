@@ -14,6 +14,10 @@ CSP = "default-src 'self'; connect-src 'self' ws: wss:"
 
 def _apply_headers(resp, tls_enabled: bool):
     resp.headers["Content-Security-Policy"] = CSP
+    # no-cache = 可快取但每次使用前必須向伺服器驗證（靜態檔已有 Last-Modified/ETag，
+    # 未改動只回 304，區網內成本可忽略）。否則瀏覽器啟發式快取會讓改版後的
+    # HTML 配上舊版 JS（版本錯配），長期掛著的看板頁面會整頁掛掉
+    resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
