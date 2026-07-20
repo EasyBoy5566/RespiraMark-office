@@ -63,6 +63,33 @@ let initTheme = "dark";
 try { initTheme = localStorage.getItem("rm-theme") || "dark"; } catch (e) { /* 同上 */ }
 applyTheme(initTheme);
 
+// ── 版面欄數（2–8 欄，選擇存 localStorage）───────────────────────
+// 密度依欄數自動分級：欄數越多卡片越精簡（波形變矮、設定值列縮小→隱藏），
+// 好讓一頁塞得下 ~20 床；分級門檻與各級樣式見 style.css 的 main#grid[data-density]。
+// 警報/床號/波形不論密度一律保留；完整資料點卡片放大仍看得到。
+const colsSelect = document.getElementById("colsSelect");
+const DEFAULT_COLS = 4;
+const MIN_COLS = 2, MAX_COLS = 8;
+
+function densityTier(n) {
+  return n <= 3 ? "full" : n <= 5 ? "mid" : "compact";
+}
+
+function applyCols(n) {
+  n = Math.max(MIN_COLS, Math.min(MAX_COLS, n | 0));
+  grid.style.setProperty("--cols", n);
+  grid.dataset.density = densityTier(n);
+  colsSelect.value = String(n);
+  try { localStorage.setItem("rm-cols", n); } catch (e) { /* 私密瀏覽等，忽略 */ }
+  devices.forEach(setupCanvases);   // 欄寬/波形高度改變 → 依新尺寸從歷史重畫
+}
+
+colsSelect.addEventListener("change", () => applyCols(parseInt(colsSelect.value, 10)));
+
+let initCols = DEFAULT_COLS;
+try { initCols = parseInt(localStorage.getItem("rm-cols"), 10) || DEFAULT_COLS; } catch (e) { /* 同上 */ }
+applyCols(initCols);
+
 // ── 呼吸器警報音（呼吸器發出 level 1/2 警報時鳴響；靜音鈕在卡片右上角）──
 // 純 Web Audio 合成短嗶聲（零相依、不用音檔）。瀏覽器自動播放政策要求
 // 使用者先與頁面互動過才可出聲，故以首次點擊/按鍵解鎖共用 AudioContext；

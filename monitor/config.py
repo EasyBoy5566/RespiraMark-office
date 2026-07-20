@@ -17,7 +17,7 @@ DEFAULTS = {
     "offline_timeout": 5.0,   # 秒，無資料判定裝置離線
     "ingest_token": "",       # Pi 連入的存取權杖（單一共用，退回模式）；空字串 = 不驗證（僅限開發環境）
     "devices_file": "devices.json",  # 每台裝置獨立權杖檔（tools/make_device.py 建立）；不存在則退回 ingest_token
-    "max_devices": 16,        # 裝置數上限，超過即拒絕新裝置（防範記憶體被塞爆）
+    "max_devices": 65,        # 裝置數上限，超過即拒絕新裝置（防範記憶體被塞爆）
     # ── ingest 連線防護（防範區網內異常/惡意連線耗盡資源）──
     "ingest_max_conns": 64,       # 同時 TCP 連線數上限，超過直接拒絕新連線
     "ingest_hello_timeout": 10.0,  # 秒，連線後這麼久沒收到合法 hello 就斷線

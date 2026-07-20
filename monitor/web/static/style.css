@@ -77,6 +77,21 @@ header {
 #clock { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .conn.online  { color: var(--green); }
 .conn.offline { color: var(--red); }
+
+/* 欄數選擇器（header 狀態區）：切換每列卡片數；密度依欄數自動分級（見 app.js applyCols）*/
+.cols-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.cols-picker-label { font-size: 13px; }
+.cols-picker select {
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.cols-picker select:hover { border-color: var(--hover); }
+.cols-picker select:focus { outline: none; border-color: var(--focus); }
 .theme-btn {
   font-size: 14px;
   color: var(--text-secondary);
@@ -98,16 +113,52 @@ header {
   padding: 14px 10px;
 }
 
-/* ── 卡片格線：固定兩欄（窄螢幕/手機退回一欄）──────────────── */
+/* ── 卡片格線：欄數由使用者選（2–8 欄，見 app.js applyCols）；窄螢幕退回一欄 ──
+ * 密度依欄數自動分級（data-density 由 app.js 設；警報/床號/波形一律保留）：
+ *   full（2–3 欄） 完整卡：波形 58px、設定值列正常
+ *   mid （4–5 欄） 波形縮矮、內距收緊、設定值列縮小並省去「設定值」小標
+ *   compact（6–8 欄） 波形再縮、隱藏整個設定值區，只剩 標題列＋3 條迷你波形 */
 main#grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
   gap: 10px;
   padding: 10px;
   align-items: start;
 }
+
+/* mid（4–5 欄）*/
+main#grid[data-density="mid"] .wave-row canvas { height: 46px; }
+main#grid[data-density="mid"] .waves { padding: 3px 7px 1px; }
+main#grid[data-density="mid"] .strip-cap { display: none; }
+main#grid[data-density="mid"] .param-strip {
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  gap: 3px; padding: 3px 7px 7px;
+}
+main#grid[data-density="mid"] .pchip .k { font-size: 10px; }
+main#grid[data-density="mid"] .pchip .val { font-size: 13px; }
+
+/* compact（6–8 欄）*/
+main#grid[data-density="compact"] .wave-row { margin-bottom: 2px; }
+main#grid[data-density="compact"] .wave-row canvas { height: 38px; }
+main#grid[data-density="compact"] .waves { padding: 2px 6px 1px; }
+main#grid[data-density="compact"] .strip-cap,
+main#grid[data-density="compact"] .param-strip { display: none; }
+main#grid[data-density="compact"] .card-head { padding: 4px 8px; }
+main#grid[data-density="compact"] .dev-name { font-size: 13px; }
+main#grid[data-density="compact"] .patient { font-size: 11px; }
+main#grid[data-density="compact"] .head-alarms { font-size: 11px; }
+main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-size: 11px; }
+
+/* 窄螢幕/手機：退回單欄，且不論選幾欄都以完整卡呈現（波形回原高、設定值顯示）*/
 @media (max-width: 800px) {
   main#grid { grid-template-columns: 1fr; }
+  main#grid[data-density] .wave-row canvas { height: 58px; }
+  main#grid[data-density] .strip-cap { display: block; }
+  main#grid[data-density] .param-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
+    gap: 4px; padding: 4px 8px 8px;
+  }
 }
 
 .empty {

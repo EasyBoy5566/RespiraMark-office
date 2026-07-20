@@ -4,17 +4,23 @@ fake_pi — 模擬一台 Pi 推送擬真呼吸波形（開發測試用，純標�
 用法：
     python fake_pi.py                                   # 預設 pi-01 / TEST001 → 127.0.0.1
     python fake_pi.py --device pi-02 --patient A123456
+    python fake_pi.py --number 20                       # 一個指令開 20 台（pi-01..pi-20）
+    python fake_pi.py --device test-01 -n 20 --alarms   # test-01..test-20，全部帶警報
     python fake_pi.py --host 192.168.0.50               # 跨機器測試（在真 Pi 上也能跑）
 
-多開幾個（不同 --device）就能模擬多床畫面。Ctrl+C 結束。
+--number/-n 大於 1 時，會依 --device / --patient 尾碼自動編號同時開多台（各一條執行緒）。
+不想用 --number 也可以自己多開幾個不同 --device 的行程。Ctrl+C 全部結束。
 """
 
 import argparse
+import copy
 import json
 import math
 import random
+import re
 import socket
 import ssl
+import threading
 import time
 
 SAMPLE_RATE = 100        # Hz，與 Pi 端實際波形速率同量級
@@ -183,13 +189,53 @@ def run_session(args, model, sysmodel):
         time.sleep(0.01)
 
 
+def run_device(args):
+    """單台裝置的連線主迴圈：斷線自動重連（KeyboardInterrupt 交給呼叫端收尾）"""
+    model = BreathModel(rr=args.rr)
+    sysmodel = FakeSys(hot=args.sys_hot)
+    while True:
+        try:
+            run_session(args, model, sysmodel)
+        except OSError as e:
+            print(f"[{args.device}] 連線失敗/中斷（2 秒後重試）: {e}")
+            time.sleep(2.0)
+
+
+def _expand_series(base, count):
+    """把 base 依尾碼數字展開成 count 個名稱（保留原本的位數寬度）：
+    test-01 → test-01, test-02, …；TEST001 → TEST001, TEST002, …；
+    沒有尾碼數字則補 -01, -02（如 ICU → ICU-01, ICU-02）"""
+    m = re.match(r"^(.*?)(\d+)$", base)
+    if m:
+        prefix, num = m.group(1), m.group(2)
+        start, width = int(num), len(num)
+        return [f"{prefix}{i:0{width}d}" for i in range(start, start + count)]
+    return [f"{base}-{i:02d}" for i in range(1, count + 1)]
+
+
+def build_device_args(args):
+    """--number > 1 時，依 --device / --patient 尾碼自動編號成多台各自的 args"""
+    names = _expand_series(args.device, args.number)
+    patients = _expand_series(args.patient, args.number)
+    out = []
+    for dev, pat in zip(names, patients):
+        da = copy.copy(args)
+        da.device, da.patient = dev, pat
+        # 多床時各床 RR 微幅錯開，波形不整齊劃一（更接近真實多床畫面）
+        da.rr = max(8.0, args.rr + random.uniform(-3, 3))
+        out.append(da)
+    return out
+
+
 def main():
-    ap = argparse.ArgumentParser(description="模擬一台 Pi 推送呼吸波形")
+    ap = argparse.ArgumentParser(description="模擬一台或多台 Pi 推送呼吸波形")
     ap.add_argument("--device", default="pi-01")
     ap.add_argument("--patient", default="TEST001")
+    ap.add_argument("--number", "-n", type=int, default=1,
+                    help="一次模擬幾台裝置（依尾碼自動編號，如 --device test-01 -n 20 → test-01..test-20）")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--rr", type=float, default=15.0, help="呼吸頻率 (預設 15)")
+    ap.add_argument("--rr", type=float, default=15.0, help="呼吸頻率 (預設 15；多床時各床會微幅錯開)")
     ap.add_argument("--token", default="",
                     help="hello 的存取權杖（伺服器 config.json 有設 ingest_token 時必填）")
     ap.add_argument("--alarms", action="store_true",
@@ -200,17 +246,26 @@ def main():
                     help="TLS 連線：伺服器自建 CA 憑證（ca.pem）路徑；省略 = 明文")
     args = ap.parse_args()
 
-    model = BreathModel(rr=args.rr)
-    sysmodel = FakeSys(hot=args.sys_hot)
-    while True:
+    # 單台：直接在主執行緒跑，Ctrl+C 立即結束（行為與原本相同）
+    if args.number <= 1:
         try:
-            run_session(args, model, sysmodel)
+            run_device(args)
         except KeyboardInterrupt:
             print(f"\n[{args.device}] 結束")
-            return
-        except OSError as e:
-            print(f"[{args.device}] 連線失敗/中斷（2 秒後重試）: {e}")
-            time.sleep(2.0)
+        return
+
+    # 多台：每台一條 daemon 執行緒，Ctrl+C 由主執行緒統一收尾
+    dev_args = build_device_args(args)
+    for da in dev_args:
+        threading.Thread(target=run_device, args=(da,), daemon=True).start()
+        time.sleep(0.05)   # 錯開連線與波形相位，避免同時湧入
+    print(f"已啟動 {len(dev_args)} 台模擬裝置："
+          f"{dev_args[0].device} … {dev_args[-1].device}（Ctrl+C 全部結束）")
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n全部結束")
 
 
 if __name__ == "__main__":
