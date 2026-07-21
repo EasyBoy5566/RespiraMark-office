@@ -33,6 +33,7 @@ const grid = document.getElementById("grid");
 const overlay = document.getElementById("overlay");
 const emptyHint = document.getElementById("empty");
 const connEl = document.getElementById("conn");
+const autoHideHeader = document.querySelector("header.auto-hide");
 
 const devices = new Map();   // device_id -> Dev
 
@@ -98,7 +99,23 @@ function applyCols(n) {
   refitModeChips();                 // 欄寬改變 → Mode 文字重新量寬縮字
 }
 
-colsSelect.addEventListener("change", () => applyCols(parseInt(colsSelect.value, 10)));
+let headerDismissTimer = null;
+function dismissAutoHideHeader() {
+  colsSelect.blur();                // select 的焦點不可繼續把狀態列鎖在展開狀態
+  if (!autoHideHeader) return;
+  clearTimeout(headerDismissTimer);
+  autoHideHeader.classList.add("is-dismissed");
+  // 收合動畫結束後解除強制狀態，讓下次碰到頂端時仍可正常展開。
+  headerDismissTimer = setTimeout(() => {
+    autoHideHeader.classList.remove("is-dismissed");
+    headerDismissTimer = null;
+  }, 220);
+}
+
+colsSelect.addEventListener("change", () => {
+  applyCols(parseInt(colsSelect.value, 10));
+  dismissAutoHideHeader();
+});
 
 let initCols = DEFAULT_COLS;
 try { initCols = parseInt(localStorage.getItem("rm-cols"), 10) || DEFAULT_COLS; } catch (e) { /* 同上 */ }

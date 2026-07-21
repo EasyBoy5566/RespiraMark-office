@@ -127,7 +127,8 @@ header {
 
 /* 儀表板頂端狀態列自動收起（只用於 index，管理頁 header 維持常駐）：
  * 平時滑出畫面外，把垂直空間全讓給下方小卡；滑鼠碰到頂端感應條(#top-peek)或列本身、
- * 或列內控制項取得焦點（欄數選單/選單展開）時才滑下。放大檢視 overlay(z=20) 蓋過它。*/
+ * 或使用鍵盤操作列內控制項時才滑下。滑鼠點擊留下的焦點不會鎖住狀態列；
+ * 游標離開後即可自動收回。放大檢視 overlay(z=20) 蓋過它。*/
 header.auto-hide {
   position: fixed; left: 0; right: 0; top: 0;
   transform: translateY(-100%);
@@ -149,8 +150,13 @@ header.auto-hide {
 }
 #top-peek:hover + header.auto-hide,
 header.auto-hide:hover,
-header.auto-hide:focus-within {
+header.auto-hide:has(:focus-visible) {
   transform: translateY(0);
+}
+/* 使用者完成欄數選擇後，由 app.js 短暫套用此類別，覆蓋 hover/focus 並立即收回。 */
+#top-peek:hover + header.auto-hide.is-dismissed,
+header.auto-hide.is-dismissed {
+  transform: translateY(-100%);
 }
 
 /* 欄數選擇器（header 狀態區）：切換每列卡片數；密度依欄數自動分級（見 app.js applyCols）*/
