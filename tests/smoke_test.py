@@ -272,7 +272,7 @@ async def run_checks():
         for path in ("/static/app.js", "/static/style.css", "/static/login.js",
                      "/static/sys.js", "/static/auth.js", "/static/admin.js",
                      "/static/alarm_levels.js", "/static/footer.js",
-                     "/static/alarm-sounds/config.json"):
+                     "/static/alarm_synth.js"):
             async with s.get(f"{BASE}{path}") as r:
                 check(f"靜態資源 {path}", r.status == 200)
         async with s.get(f"{BASE}/history/smoke-01") as r:
@@ -297,16 +297,27 @@ async def run_checks():
         dash_html = await r.text()
         check("儀表板已無離線提示音開關（改為呼吸器警報音，見 CHANGELOG）",
               'id="soundToggle"' not in dash_html)
+        check("儀表板在 app.js 前載入共用警報合成器",
+              '/static/alarm_synth.js' in dash_html and
+              dash_html.index('/static/alarm_synth.js') <
+              dash_html.index('/static/app.js'))
     async with authed.get(f"{BASE}/static/app.js") as r:
         app_js = await r.text() if r.status == 200 else ""
         check("前端含呼吸器警報音與卡片靜音鈕",
               "mute-btn" in app_js and "unlockAudio" in app_js)
-        check("前端含可自訂警報音與合成音備援",
-              "alarmSoundConfigReady" in app_js and
-              "playConfiguredAlarmSound" in app_js and "soundAlarm" in app_js)
+        check("前端以 Web Audio 合成警報音且不載入 MP3",
+              "RMAlarmSynth.play" in app_js and "soundAlarm" in app_js and
+              "ALARM_SILENCE_GAP_SEC" in app_js and
+              "activeAlarmPlayback.endAt + ALARM_SILENCE_GAP_SEC" in app_js and
+              "decodeAudioData" not in app_js and
+              "alarmSoundConfigReady" not in app_js)
         check("單床詳細畫面含 LOOP、警報紀錄與預測模組插槽",
               "loop-select" in app_js and "loadAlarmHistory" in app_js
               and "拔管成功率" in app_js and "呼吸不同步預測" in app_js)
+        check("LOOP 以 trigger 到下一個 trigger 為完整呼吸週期",
+              "dev.loopCurrent.concat(sample)" in app_js and
+              "dev.loopCurrent = [sample]" in app_js and
+              "breath[0].trig" in app_js)
     async with authed.get(f"{BASE}/api/me") as r:
         me = await r.json() if r.status == 200 else {}
         check("/api/me 回報登入者與角色",
@@ -327,8 +338,8 @@ async def run_checks():
 
     # 注意：W-101/W-102 連線防護測試刻意放在本函式後段（見下方），
     # 因為它們合計要花數秒等待逾時，若放在這裡會延後下面的 snapshot/alarm
-    # 檢查時間點，而 smoke-02 的 fake_pi 警報會在隨機間隔切換，delay 太多會
-    # 剛好跨過切換點導致誤判失敗（曾經因此觸發過一次假警報）。
+    # 檢查時間點；smoke-02 以 --alarm-immediate 強制首發並固定 20 秒後解除，
+    # 避免剛好跨過切換點導致 snapshot 誤判失敗。
 
     await asyncio.sleep(2.0)          # 讓 fake_pi 連上並開始送資料
     msgs = await collect_ws(authed, WS_COLLECT_SECONDS)
@@ -475,7 +486,7 @@ async def run_checks():
               str(sorted(devs3)))
 
     # ── 警報歷史（IMPROVEMENT_PLAN.md W-302）─────────────────────────
-    # smoke-02 用 --alarms --alarm-immediate 啟動：連線即觸發，之後隨機切換；
+    # smoke-02 用 --alarms --alarm-immediate 啟動：連線即觸發，20 秒後解除；
     # 這個檢查放在測試最後段，前面各項檢查累計耗時已足夠跨過第一次解除
     alarm_csv_path = os.path.join(ALARM_LOG_DIR, "alarm_smoke-02.csv")
     alarm_events = []
@@ -583,12 +594,16 @@ def main():
     try:
         procs.append(start([PY, "main.py", "--config", cfg_path], log_file))
         time.sleep(1.5)
-        # smoke-02 帶 --alarms --alarm-immediate：驗證警報路徑（啟動即觸發一則）
+        # smoke-02 啟動即觸發警報，20 秒後才解除：讓前段 snapshot 穩定看到警報，
+        # 同時讓後段 CSV 檢查仍能看到 appeared/cleared 兩種事件。
         # smoke-03：移除離線裝置測試用（run_checks 會先關掉它再移除）
         ca_path = os.path.join(CERT_DIR, "ca.pem")
         for dev, patient, rr, extra in (
                 ("smoke-01", "SMOKE001", "15", []),
-                ("smoke-02", "SMOKE002", "22", ["--alarms", "--alarm-immediate"]),
+                ("smoke-02", "SMOKE002", "22", [
+                    "--alarms", "--alarm-immediate",
+                    "--alarm-interval-min", "20", "--alarm-interval-max", "20",
+                ]),
                 ("smoke-03", "SMOKE003", "18", [])):
             procs.append(start(
                 [PY, os.path.join("tools", "fake_pi.py"),

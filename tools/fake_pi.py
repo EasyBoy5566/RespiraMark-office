@@ -5,7 +5,7 @@ fake_pi — 模擬一台 Pi 推送擬真呼吸波形（開發測試用，純標�
     python fake_pi.py                                   # 預設 pi-01 / TEST001 → 127.0.0.1
     python fake_pi.py --device pi-02 --patient A123456
     python fake_pi.py --number 20                       # 一個指令開 20 台（pi-01..pi-20）
-    python fake_pi.py --device test-01 -n 20 --alarms   # test-01..test-20，全部帶警報
+    python fake_pi.py --device test-01 -n 20 --alarms   # test-01..test-20，每次檢查 3% 機率觸發
     python fake_pi.py --host 192.168.0.50               # 跨機器測試（在真 Pi 上也能跑）
 
 --number/-n 大於 1 時，會依 --device / --patient 尾碼自動編號同時開多台（各一條執行緒）。
@@ -138,6 +138,11 @@ def random_alarm_interval(args):
     return random.uniform(args.alarm_interval_min, args.alarm_interval_max)
 
 
+def should_trigger_alarm(probability, force=False):
+    """無作用中警報時，依機率決定是否觸發；force 供 smoke test 強制首發。"""
+    return force or random.random() < probability
+
+
 def run_session(args, model, sysmodel):
     sock = socket.create_connection((args.host, args.port), timeout=3.0)
     if args.tls_ca:
@@ -171,6 +176,7 @@ def run_session(args, model, sysmodel):
         first_delay = 0.0 if args.alarm_immediate else random_alarm_interval(args)
         next_alarm = next_sample + first_delay
     alarm_on = False
+    force_alarm = args.alarm_immediate
     dt = 1.0 / SAMPLE_RATE
 
     while True:
@@ -195,11 +201,18 @@ def run_session(args, model, sysmodel):
             send_lines(sock, [sysmodel.sample()])
             next_sys = now + SYS_INTERVAL
         if next_alarm is not None and now >= next_alarm:
-            alarm_on = not alarm_on
-            alarms = random_alarms() if alarm_on else []
-            send_lines(sock, [{"type": "alarm", "alarms": alarms}])
-            print(f"[{args.device}] 警報 {'觸發' if alarm_on else '解除'}: "
-                  f"{[a['text'] for a in alarms] or '—'}")
+            alarms = None
+            if alarm_on:
+                alarm_on = False
+                alarms = []
+            elif should_trigger_alarm(args.alarm_probability, force_alarm):
+                alarm_on = True
+                alarms = random_alarms()
+            force_alarm = False
+            if alarms is not None:
+                send_lines(sock, [{"type": "alarm", "alarms": alarms}])
+                print(f"[{args.device}] 警報 {'觸發' if alarm_on else '解除'}: "
+                      f"{[a['text'] for a in alarms] or '—'}")
             next_alarm = now + random_alarm_interval(args)
         time.sleep(0.01)
 
@@ -254,7 +267,9 @@ def main():
     ap.add_argument("--token", default="",
                     help="hello 的存取權杖（伺服器 config.json 有設 ingest_token 時必填）")
     ap.add_argument("--alarms", action="store_true",
-                    help="模擬警報：隨機時間觸發/解除，警報種類也會隨機（開發警報 UI 用）")
+                    help="模擬警報：每次檢查依機率觸發，警報種類隨機（開發警報 UI 用）")
+    ap.add_argument("--alarm-probability", type=float, default=0.03,
+                    help="無作用中警報時，每次檢查的觸發機率（預設 0.03 = 3%%）")
     ap.add_argument("--alarm-interval-min", type=float, default=5.0,
                     help="警報觸發或解除前的最短秒數（預設 5）")
     ap.add_argument("--alarm-interval-max", type=float, default=20.0,
@@ -272,6 +287,9 @@ def main():
             or args.alarm_interval_min <= 0
             or args.alarm_interval_max < args.alarm_interval_min):
         ap.error("警報間隔必須大於 0，且 --alarm-interval-max 不得小於 --alarm-interval-min")
+    if (not math.isfinite(args.alarm_probability)
+            or not 0.0 <= args.alarm_probability <= 1.0):
+        ap.error("--alarm-probability 必須介於 0 與 1 之間")
 
     # 單台：直接在主執行緒跑，Ctrl+C 立即結束（行為與原本相同）
     if args.number <= 1:
