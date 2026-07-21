@@ -80,6 +80,7 @@ applyTheme(initTheme);
 const colsSelect = document.getElementById("colsSelect");
 const DEFAULT_COLS = 4;
 const MIN_COLS = 2, MAX_COLS = 8;
+let currentCols = DEFAULT_COLS;
 
 function densityTier(n) {
   return n <= 3 ? "full" : n <= 5 ? "mid" : "compact";
@@ -87,10 +88,12 @@ function densityTier(n) {
 
 function applyCols(n) {
   n = Math.max(MIN_COLS, Math.min(MAX_COLS, n | 0));
+  currentCols = n;
   grid.style.setProperty("--cols", n);
   grid.dataset.density = densityTier(n);
   colsSelect.value = String(n);
   try { localStorage.setItem("rm-cols", n); } catch (e) { /* 私密瀏覽等，忽略 */ }
+  syncGridPlaceholders();          // 欄數改變時重新補齊末列空位
   devices.forEach(setupCanvases);   // 欄寬/波形高度改變 → 依新尺寸從歷史重畫
   refitModeChips();                 // 欄寬改變 → Mode 文字重新量寬縮字
 }
@@ -257,12 +260,27 @@ function buildCard(dev) {
   setupCanvases(dev);
 }
 
+function syncGridPlaceholders() {
+  grid.querySelectorAll(".grid-placeholder").forEach((el) => el.remove());
+  if (!devices.size) return;
+
+  const missing = (currentCols - (devices.size % currentCols)) % currentCols;
+  for (let i = 0; i < missing; i++) {
+    const placeholder = document.createElement("div");
+    placeholder.className = "grid-placeholder";
+    placeholder.setAttribute("aria-hidden", "true");
+    grid.appendChild(placeholder);
+  }
+}
+
 function sortGrid() {
   [...grid.children]
+    .filter((el) => el.classList.contains("card"))
     // 數字感知排序：device-1、device-2、device-10，而不是 device-1、device-10、device-2。
     .sort((a, b) => a.dataset.device.localeCompare(
       b.dataset.device, undefined, { numeric: true, sensitivity: "base" }))
     .forEach((el) => grid.appendChild(el));
+  syncGridPlaceholders();
 }
 
 // ── 放大 / 還原 ──────────────────────────────────────────────────
@@ -616,6 +634,7 @@ function onDeviceRemoved(id) {
   if (dev.big) overlay.classList.add("hidden");
   dev.card.remove();
   devices.delete(id);
+  sortGrid();
   if (!devices.size) emptyHint.classList.remove("hidden");
 }
 

@@ -78,9 +78,20 @@
 /* 監視器模式 版面結構：磚格完全貼齊、方角無圓、無浮起。大網格線由 grid 底色(--tile-line，偏白)
  * 透過 gap 透出；卡片內部線條另用 --divider（較深）→ 兩者分離、可各自調色。
  * 警報/離線框改用 outline（畫在磚格內，不佔版面、不破壞貼齊的格線）。*/
-[data-theme="mono"] main#grid { gap: var(--tile-gap); padding: 0; background: var(--tile-line); }
+[data-theme="mono"] main#grid {
+  gap: var(--tile-gap);
+  padding: var(--tile-gap);                /* 與內網格同粗的四周外框 */
+  background: var(--tile-line);
+}
+[data-theme="mono"] main#grid:empty { padding: 0; }
 [data-theme="mono"] .card { border: none; border-radius: 0; }
 [data-theme="mono"] .card:hover { background: var(--hover); }
+[data-theme="mono"] .grid-placeholder {
+  display: block;
+  align-self: stretch;                    /* 高度跟末列的實際設備卡一致 */
+  min-width: 0;
+  background: var(--card-bg);             /* 空位維持純黑，不顯示任何內容 */
+}
 [data-theme="mono"] .card.alarming-1,
 [data-theme="mono"] .card.pi-offline { outline: 2px solid var(--red);   outline-offset: -2px; }
 [data-theme="mono"] .card.alarming-2 { outline: 2px solid var(--amber); outline-offset: -2px; }
@@ -189,6 +200,9 @@ main#grid {
   padding: 10px;
   align-items: start;
 }
+
+/* 空位只屬於監視器模式；一般深／淺色主題維持原本的卡片流。 */
+.grid-placeholder { display: none; }
 
 /* mid（4–5 欄）*/
 main#grid[data-density="mid"] .wave-row canvas { height: 46px; }
@@ -472,12 +486,22 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
 .sys-chart canvas { display: block; width: 100%; height: 64px; }
 
 /* ── 登入頁 ──────────────────────────────────────────────── */
-.login-wrap {
+body.login-page {
   min-height: 100vh;
+  min-height: 100dvh;                    /* 手機瀏覽器工具列展開時也以可見高度計算 */
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+.login-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
   display: flex; align-items: center; justify-content: center;
   background: var(--bg-primary);
   padding: 20px;
 }
+.login-page > .disclaimer { flex: 0 0 auto; }
 .login-card {
   background: var(--card-bg);
   border: 1px solid var(--divider);
