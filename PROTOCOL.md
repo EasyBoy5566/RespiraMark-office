@@ -39,13 +39,13 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `GET /api/admin/accounts` | 帳號唯讀清單 `{"users":[{"username":...,"role":...}]}`（不含密碼雜湊；建立/刪除仍用 `tools/make_user.py`） |
 | `DELETE /api/admin/devices/{device}` | 移除**離線**裝置（清出儀表板版面；裝置重新連上會自動回來）。線上裝置回 409、未知裝置回 404 |
 | `GET /api/admin/syslog/{device}` | 下載該裝置的長期 sys CSV（`sys_<裝置>.csv`）；無檔案（未啟用落地或尚無資料）回 404 |
-| `GET /api/admin/alarmlog/{device}` | 下載該裝置的警報事件歷史 CSV（`alarm_<裝置>.csv`，欄位 `time,event,cp,code,prio,text`，`event` 為 `appeared`/`cleared`；只記機台編號與警報內容，不記病人代碼）；無檔案回 404 |
+| `GET /api/admin/alarmlog/{device}` | 從 SQLite 即時匯出該裝置最近 7 天的警報 episode CSV（`alarm_<裝置>.csv`，含開始、結束、持續秒數、狀態及警報內容）；只記機台編號與警報內容，不記病人代碼；無紀錄回 404 |
 
 **單床詳細監測 API（viewer/admin 均可使用）**：
 
 | 端點 | 說明 |
 |---|---|
-| `GET /api/alarm-history/{device}?limit=50` | 查看該裝置最近警報事件（新到舊，最多 100 筆），供單床詳細監測畫面顯示；只含警報 CSV 欄位，不含病人代碼 |
+| `GET /api/alarm-history/{device}?limit=50` | 查看該裝置最近警報 episode（新到舊，最多 100 筆），回傳 `episodes`；狀態為 `active`／`cleared`／`unknown`（離線或重啟時無法確認真正解除點），供單床詳細監測畫面顯示；不含病人代碼 |
 
 ## 第一段：Pi → 伺服器（TCP，每行一個 JSON，`\n` 結尾）
 

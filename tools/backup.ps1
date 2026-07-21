@@ -7,7 +7,8 @@
 #   config.json, accounts.json, devices.json,
 #   certs\server.pem, certs\server.key（**不含 ca.key**——CA 私鑰依規定離線保存，
 #   絕不進自動備份，見 IMPROVEMENT_PLAN.md W-204/F-13），
-#   sys_logs\、alarm_logs\、logs\audit.log
+#   sys_logs\、logs\audit.log
+#   依目前資源決策，alarm_logs\alarm_history.sqlite3 刻意不納入備份。
 # 打包成 respiramark_backup_<日期時間>.zip，存到 -Dest 指定的資料夾（建議是外接碟
 # 或網路磁碟，不要跟伺服器本機是同一顆硬碟）。-KeepDays 內的備份自動保留，較舊的清掉。
 #
@@ -49,7 +50,6 @@ Copy-IfExists "devices.json"
 Copy-IfExists "certs\server.pem"
 Copy-IfExists "certs\server.key"          # 注意：刻意不複製 certs\ca.key
 Copy-IfExists "sys_logs"
-Copy-IfExists "alarm_logs"
 Copy-IfExists "logs\audit.log"
 
 if (Test-Path (Join-Path $ProjectRoot "certs\ca.key")) {

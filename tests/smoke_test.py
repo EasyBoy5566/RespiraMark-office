@@ -18,6 +18,7 @@ device_removed 廣播 → 全部關閉。
 import asyncio
 import json
 import os
+import sqlite3
 import ssl
 import subprocess
 import sys
@@ -45,6 +46,7 @@ VIEWER_PASS = "SmokeView123"
 TMP = tempfile.gettempdir()
 SYS_LOG_DIR = os.path.join(TMP, "respiramark_smoke_syslogs")
 ALARM_LOG_DIR = os.path.join(TMP, "respiramark_smoke_alarmlogs")
+ALARM_DB_PATH = os.path.join(ALARM_LOG_DIR, "alarm_history.sqlite3")
 LOG_DIR = os.path.join(TMP, "respiramark_smoke_logs")
 CERT_DIR = os.path.join(TMP, "respiramark_smoke_certs")
 ACCOUNTS = os.path.join(TMP, "respiramark_smoke_accounts.json")
@@ -422,11 +424,13 @@ async def run_checks():
         check("viewer 存取管理 API 回 403", r.status == 403)
     async with viewer.get(f"{BASE}/api/alarm-history/smoke-02?limit=2") as r:
         alarm_history_data = await r.json() if r.status == 200 else {}
-        alarm_history_events = alarm_history_data.get("events") or []
+        alarm_history_episodes = alarm_history_data.get("episodes") or []
         check("viewer 可讀取最近警報紀錄",
-              r.status == 200 and 1 <= len(alarm_history_events) <= 2
-              and all("patient" not in event for event in alarm_history_events),
-              str(alarm_history_events)[:120])
+              r.status == 200 and 1 <= len(alarm_history_episodes) <= 2
+              and all("patient" not in episode for episode in alarm_history_episodes)
+              and all(episode.get("status") in {"active", "cleared", "unknown"}
+                      for episode in alarm_history_episodes),
+              str(alarm_history_episodes)[:120])
     await viewer.close()
 
     async with authed.get(f"{BASE}/admin") as r:
@@ -488,17 +492,22 @@ async def run_checks():
     # ── 警報歷史（IMPROVEMENT_PLAN.md W-302）─────────────────────────
     # smoke-02 用 --alarms --alarm-immediate 啟動：連線即觸發，20 秒後解除；
     # 這個檢查放在測試最後段，前面各項檢查累計耗時已足夠跨過第一次解除
-    alarm_csv_path = os.path.join(ALARM_LOG_DIR, "alarm_smoke-02.csv")
-    alarm_events = []
-    if os.path.exists(alarm_csv_path):
-        with open(alarm_csv_path, encoding="utf-8") as f:
-            alarm_events = [line.split(",")[1] for line in f.readlines()[1:] if line.strip()]
-    check("警報歷史 CSV 含出現事件", "appeared" in alarm_events, alarm_events)
-    check("警報歷史 CSV 含解除事件", "cleared" in alarm_events, alarm_events)
+    alarm_rows = []
+    if os.path.exists(ALARM_DB_PATH):
+        with sqlite3.connect(ALARM_DB_PATH) as db:
+            alarm_rows = db.execute(
+                "SELECT status, start_reason FROM alarm_episode WHERE device_id = ?",
+                ("smoke-02",)).fetchall()
+    check("SQLite 警報歷史含啟動中的 episode",
+          any(reason in {"observed_active", "appeared"} for _, reason in alarm_rows),
+          alarm_rows)
+    check("SQLite 警報歷史含已解除 episode",
+          any(status == "cleared" for status, _ in alarm_rows), alarm_rows)
     async with authed.get(f"{BASE}/api/admin/alarmlog/smoke-02") as r:
         body = await r.text() if r.status == 200 else ""
         check("admin 可下載警報歷史 CSV（含表頭）",
-              r.status == 200 and body.startswith("time,event"), f"{len(body)} bytes")
+              r.status == 200 and body.lstrip("\ufeff").startswith("episode_id,device_id"),
+              f"{len(body)} bytes")
     async with authed.get(f"{BASE}/api/admin/alarmlog/smoke-01") as r:
         check("未曾發生警報的裝置下載回 404（smoke-01 全程無警報）", r.status == 404)
 
@@ -558,10 +567,11 @@ def main():
         os.remove(os.path.join(LOG_DIR, "audit.log"))     # 每次重建，避免舊測試殘留
     except OSError:
         pass
-    try:
-        os.remove(os.path.join(ALARM_LOG_DIR, "alarm_smoke-02.csv"))
-    except OSError:
-        pass
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(ALARM_DB_PATH + suffix)
+        except OSError:
+            pass
 
     log_path = os.path.join(TMP, "respiramark_smoke_server.log")
     log_file = open(log_path, "w", encoding="utf-8")
@@ -584,7 +594,8 @@ def main():
                    "ingest_idle_timeout": IDLE_TIMEOUT,
                    "max_viewers": MAX_VIEWERS,
                    "sys_log_dir": SYS_LOG_DIR,
-                   "alarm_log_dir": ALARM_LOG_DIR,
+                   "alarm_db_path": ALARM_DB_PATH,
+                   "alarm_retention_days": 7,
                    "tls_cert": os.path.join(CERT_DIR, "server.pem"),
                    "tls_key": os.path.join(CERT_DIR, "server.key"),
                    "auth_enabled": True, "accounts_file": ACCOUNTS,

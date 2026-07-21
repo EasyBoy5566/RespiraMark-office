@@ -199,34 +199,45 @@ class AlarmLogWiringTest(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="rm_hub_alarmlog_test_")
+        self.hubs = []
+
+    def make_hub(self):
+        hub = TelemetryHub(alarm_db_path=os.path.join(self.dir, "alarm.sqlite3"))
+        self.hubs.append(hub)
+        return hub
 
     def tearDown(self):
+        for hub in self.hubs:
+            hub.close()
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_alarm_message_reaches_alarm_log(self):
-        hub = TelemetryHub(alarm_log_dir=self.dir)
+        hub = self.make_hub()
         _, seq = hub.device_hello(hello_msg())
         hub.device_message("pi-01", seq, {"type": "alarm", "alarms": [
-            {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}]})
-        path = hub.alarm_csv_path("pi-01")
-        self.assertTrue(os.path.exists(path))
-        with open(path, encoding="utf-8") as f:
-            self.assertIn("appeared", f.read())
+            {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}],
+            "ts": 1_700_000_000})
+        rows = hub.alarm_history("pi-01")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "active")
+        self.assertEqual(rows[0]["start_reason"], "observed_active")
+        self.assertIsNotNone(rows[0]["source_started_at"])
+        self.assertIn("episode_id,device_id", hub.alarm_history_csv("pi-01"))
 
     def test_remove_device_forgets_active_alarms(self):
-        hub = TelemetryHub(alarm_log_dir=self.dir)
+        hub = self.make_hub()
         device, seq = hub.device_hello(hello_msg())
         hub.device_message(device, seq, {"type": "alarm", "alarms": [
             {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}]})
         hub.device_disconnected(device, seq)
         hub.remove_device(device)
-        # 裝置重新連上、同一顆警報再送一次 → 視為全新出現（而非「沒變化」被忽略）
+        # 裝置重新連上、同一顆警報再送一次 → 建立新 episode；上一段保持結束不明。
         device2, seq2 = hub.device_hello(hello_msg())
         hub.device_message(device2, seq2, {"type": "alarm", "alarms": [
             {"cp": 1, "code": "10", "prio": 28, "text": "PAW HIGH"}]})
-        with open(hub.alarm_csv_path("pi-01"), encoding="utf-8") as f:
-            appeared_count = f.read().count("appeared")
-        self.assertEqual(appeared_count, 2)
+        rows = hub.alarm_history("pi-01")
+        self.assertEqual([row["status"] for row in rows], ["active", "unknown"])
+        self.assertEqual(rows[1]["end_reason"], "device_offline")
 
 
 class SnapshotTest(unittest.TestCase):

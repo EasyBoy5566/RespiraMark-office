@@ -170,7 +170,7 @@ async def main():
     setup_audit_log(cfg)
 
     sys_log_dir = _resolve(str(cfg.get("sys_log_dir") or ""))
-    alarm_log_dir = _resolve(str(cfg.get("alarm_log_dir") or ""))
+    alarm_db_path = _resolve(str(cfg.get("alarm_db_path") or ""))
 
     # 安全設定（TLS 與登入）
     ssl_ctx = build_ssl_context(cfg)
@@ -193,7 +193,8 @@ async def main():
                        sys_log_dir=sys_log_dir,
                        sys_csv_interval=float(cfg["sys_csv_interval"]),
                        max_viewers=int(cfg["max_viewers"]),
-                       alarm_log_dir=alarm_log_dir)
+                       alarm_db_path=alarm_db_path,
+                       alarm_retention_days=int(cfg["alarm_retention_days"]))
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
                                        token=str(cfg["ingest_token"] or ""),
                                        ssl_ctx=ssl_ctx,
@@ -215,6 +216,7 @@ async def main():
             auth_watchdog.cancel()
         ingest_server.close()
         await web_runner.cleanup()
+        hub.close()
 
 
 if __name__ == "__main__":

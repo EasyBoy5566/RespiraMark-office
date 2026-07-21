@@ -95,7 +95,7 @@ function buildCard(dev) {
   csvBtn.addEventListener("click", () => downloadCsv(dev.id));
   csvBtn.title = "下載這台機器的長期系統狀態紀錄（伺服器端 CSV）";
   alarmBtn.addEventListener("click", () => downloadAlarmLog(dev.id));
-  alarmBtn.title = "下載這台機器的警報出現/解除歷史紀錄（伺服器端 CSV）";
+  alarmBtn.title = "下載這台機器最近 7 天的警報歷史（由 SQLite 匯出 CSV）";
   removeBtn.addEventListener("click", () => removeDevice(dev.id));
   dev.trendBtn = trendBtn;
   dev.removeBtn = removeBtn;

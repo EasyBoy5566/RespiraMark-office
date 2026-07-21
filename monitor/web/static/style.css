@@ -13,7 +13,7 @@
   --text-label:     #8FA2BC;
   --text-disabled:  #6B7A90;
   --green:  #00C853;
-  --amber:  #FFB300;
+  --amber:  #ffee00;
   --red:    #FF1744;
   --c-wave:     #2F80ED;                    /* 波形統一單色（Primary Blue） */
   --grid:       #24364F;                    /* 波形零線/格線 */
@@ -22,7 +22,7 @@
   --on-red:     #FFFFFF;                     /* 警報色頂端列上的文字（紅底） */
   --on-amber:   #0B1320;                     /* 警報色頂端列上的文字（深色主題亮黃底 → 深字） */
   --band-red:   rgba(255, 23, 68, 0.80);     /* 疊在波形上的警報橫幅底色（夠不透明才讀得到字，仍略透出波形）*/
-  --band-amber: rgba(255, 179, 0, 0.80);
+  --band-amber: rgba(255, 238, 0, 0.8);
   --band-blue:  rgba(47, 128, 237, 0.80);
   --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
   --sys-line:   #56A6FF;                     /* 系統狀態趨勢折線 */
@@ -43,7 +43,7 @@
   --text-label:     #5D7189;
   --text-disabled:  #9AA8BA;
   --green:  #00913C;
-  --amber:  #B26E00;
+  --amber:  #dacb02;
   --red:    #D50000;
   --c-wave:     #0277BD;                    /* 白底改用深一階藍，對比較足 */
   --grid:       #C3CFDE;
@@ -52,7 +52,7 @@
   --on-red:     #FFFFFF;
   --on-amber:   #FFFFFF;                     /* 淺色主題琥珀色較深（#B26E00）→ 白字 */
   --band-red:   rgba(213, 0, 0, 0.92);       /* 波形上警報橫幅底色（淺色主題）*/
-  --band-amber: rgba(178, 110, 0, 0.94);
+  --band-amber: rgba(218, 203, 2, 0.95);
   --band-blue:  rgba(28, 110, 213, 0.92);
   --overlay-bg: rgba(237, 241, 247, 0.96);
   --sys-line:   #0277BD;
@@ -604,7 +604,7 @@ body.detail-open { overflow: hidden; }
 .alarm-history-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .alarm-history-row {
   display: grid;
-  grid-template-columns: max-content 38px minmax(0, 1fr);
+  grid-template-columns: 62px minmax(0, 1fr) max-content;
   align-items: center; gap: 7px;
   padding: 5px 8px;
   border-bottom: 1px solid var(--divider);
@@ -614,9 +614,13 @@ body.detail-open { overflow: hidden; }
 .alarm-history-row.lvl-2 .alarm-history-name { color: var(--amber); }
 .alarm-history-row.lvl-3 .alarm-history-name { color: var(--sys-line); }
 .alarm-history-time { color: var(--text-label); font-variant-numeric: tabular-nums; }
-.alarm-history-event { font-weight: bold; color: var(--red); }
+.alarm-history-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.alarm-history-event { font-weight: bold; color: var(--text-label); white-space: nowrap; }
+.alarm-history-event.active { color: var(--red); }
 .alarm-history-event.cleared { color: var(--green); }
+.alarm-history-event.unknown { color: var(--amber); }
 .alarm-history-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alarm-history-duration { color: var(--text-disabled); font-size: 10px; font-variant-numeric: tabular-nums; }
 .panel-empty {
   min-height: 100%;
   display: flex; align-items: center; justify-content: center;

@@ -1,100 +1,311 @@
 """
-領域層 — 警報事件歷史落地（Hub 的訂閱者）
-============================================
-`alarm` 訊息是全量快照（見 PROTOCOL.md：目前所有警報，空陣列 = 全部
-解除）；這裡跟上一次已知集合比對，把「出現」「解除」兩種事件寫進
-CSV，供事後回溯查核（IMPROVEMENT_PLAN.md W-302，對應 G-02）。
+領域層 — SQLite 警報 episode 歷史
+=================================
+`alarm` 訊息是目前作用中警報的全量快照。這裡以 ``(device, cp, code)``
+配對出一段完整警報：第一次看到建立 episode，從清單消失時寫入解除時間。
 
-**只記機台編號與警報內容，絕不記病人代碼**——警報與病人的對應由院方
-以機台編號+時間，自行查對照紙本/HIS 病歷系統。
+資料庫只保存機台編號與警報內容，不保存病歷號、床邊波形或量測值。已結束
+episode 僅保留設定天數；作用中的警報不因保留期限而被刪除。
 """
 
 import csv
+import io
 import logging
 import os
+import sqlite3
 import time
-from collections import deque
-
-CSV_FIELDS = ("time", "event", "cp", "code", "prio", "text")
+from datetime import datetime
 
 
-def _safe_name(device: str) -> str:
-    """機台編號 → 可安全放進檔名的字串（比照 hub.py 既有的 _safe_name）"""
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in device) or "device"
+EXPORT_FIELDS = (
+    "episode_id", "device_id", "started_at", "ended_at", "duration_seconds",
+    "status", "start_reason", "end_reason", "cp", "code", "prio", "text",
+)
 
 
 class AlarmLog:
-    """單一實例由 TelemetryHub 持有；on_alarm() 在每則 alarm 訊息時呼叫。"""
+    """單一 SQLite 連線，由 TelemetryHub 在其 event loop 執行緒內使用。"""
 
-    def __init__(self, log_dir: str = ""):
-        self.log_dir = log_dir
+    def __init__(self, db_path: str = "", retention_days: int = 7, now_fn=None):
+        self.db_path = db_path
+        self.retention_days = max(1, int(retention_days))
+        self._now = now_fn or time.time
         self.log = logging.getLogger("alarm_log")
-        self._active = {}   # device -> {(cp, code): alarm_dict}——目前已知作用中的警報
-        if log_dir:
-            try:
-                os.makedirs(log_dir, exist_ok=True)
-            except OSError as e:
-                self.log.warning(f"警報歷史目錄無法建立，停用落地: {e}")
-                self.log_dir = ""
+        self._conn = None
+        self._active = {}       # device -> {(cp, code): episode_id}
+        self._seen_devices = set()
+        self._next_cleanup_at = 0.0
 
-    def forget(self, device: str):
-        """裝置被管理員移除時呼叫：清掉記憶體中的作用中警報集合（CSV 檔案保留，
-        歷史紀錄不受影響；裝置重新連上會從 hello 之後的第一則 alarm 重新建立）"""
-        self._active.pop(device, None)
-
-    def csv_path(self, device: str):
-        """該裝置警報歷史 CSV 的檔案路徑（供下載端點）；未啟用落地回傳 None"""
-        if not self.log_dir:
-            return None
-        return os.path.join(self.log_dir, f"alarm_{_safe_name(device)}.csv")
-
-    def recent(self, device: str, limit: int = 50) -> list:
-        """回傳最新警報事件（新到舊），供單床詳細畫面顯示。
-
-        僅讀取既有 CSV 欄位，不含病人代碼；以 deque 限制記憶體，即使長期
-        紀錄很大也只保留最後 ``limit`` 筆。檔案未啟用／不存在／暫時讀不到時
-        回傳空陣列，詳細畫面顯示空狀態即可，不讓紀錄問題影響即時監測。
-        """
-        limit = max(1, min(100, int(limit)))
-        path = self.csv_path(device)
-        if not path or not os.path.exists(path):
-            return []
-        try:
-            with open(path, "r", newline="", encoding="utf-8") as f:
-                rows = deque(csv.DictReader(f), maxlen=limit)
-            return list(reversed([dict(row) for row in rows]))
-        except (OSError, csv.Error) as e:
-            self.log.warning(f"{device} 警報歷史讀取失敗: {e}")
-            return []
-
-    def on_alarm(self, device: str, alarms: list):
-        """收到一則 alarm 全量快照：跟上次已知集合比對，記錄新增/解除的部分。
-        用 (cp, code) 當識別鍵——同一 (cp, code) 同時間只會有一個作用中實例。"""
-        prev = self._active.get(device, {})
-        cur = {}
-        for a in alarms:
-            key = (str(a.get("cp", "")), str(a.get("code", "")))
-            cur[key] = a
-        self._active[device] = cur
-        for key, a in cur.items():
-            if key not in prev:
-                self._write(device, "appeared", a)
-        for key, a in prev.items():
-            if key not in cur:
-                self._write(device, "cleared", a)
-
-    def _write(self, device: str, event: str, a: dict):
-        path = self.csv_path(device)
-        if not path:
+        if not db_path:
             return
         try:
-            is_new = not os.path.exists(path)
-            with open(path, "a", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                if is_new:
-                    w.writerow(CSV_FIELDS)
-                w.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), event,
-                           a.get("cp", ""), a.get("code", ""),
-                           a.get("prio", ""), a.get("text", "")])
-        except OSError as e:
-            self.log.warning(f"{device} 警報歷史寫入失敗: {e}")
+            parent = os.path.dirname(os.path.abspath(db_path))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            self._conn = sqlite3.connect(db_path, timeout=5.0)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA busy_timeout = 5000")
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = NORMAL")
+            self._conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            self._create_schema()
+            now = float(self._now())
+            # 前一次程序若中斷，資料庫裡的 active 無法證明仍持續；標成結束不明。
+            self._close_stale_active(now)
+            self._cleanup(now, force=True)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            self.log.warning(f"警報 SQLite 無法啟用，停用歷史紀錄: {exc}")
+            if self._conn is not None:
+                self._conn.close()
+            self._conn = None
+            self.db_path = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self._conn is not None
+
+    def _create_schema(self):
+        with self._conn:
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS alarm_episode (
+                    episode_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id        TEXT NOT NULL,
+                    cp               TEXT NOT NULL,
+                    code             TEXT NOT NULL,
+                    prio             INTEGER,
+                    text             TEXT NOT NULL DEFAULT '',
+                    started_at       REAL NOT NULL,
+                    source_started_at REAL,
+                    ended_at         REAL,
+                    source_ended_at  REAL,
+                    status           TEXT NOT NULL CHECK(status IN ('active', 'cleared', 'unknown')),
+                    start_reason     TEXT NOT NULL CHECK(start_reason IN ('appeared', 'observed_active')),
+                    end_reason       TEXT,
+                    duration_seconds REAL
+                )
+            """)
+            self._conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS alarm_episode_one_active
+                ON alarm_episode(device_id, cp, code) WHERE status = 'active'
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS alarm_episode_device_time
+                ON alarm_episode(device_id, started_at DESC, episode_id DESC)
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS alarm_episode_retention
+                ON alarm_episode(status, ended_at)
+            """)
+            self._conn.execute("PRAGMA user_version = 1")
+
+    @staticmethod
+    def _source_ts(value):
+        try:
+            result = float(value)
+            return result if result > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _prio(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _key(alarm: dict):
+        return str(alarm.get("cp", "")), str(alarm.get("code", ""))
+
+    @staticmethod
+    def _iso(ts):
+        if ts is None:
+            return None
+        return datetime.fromtimestamp(float(ts)).astimezone().isoformat(timespec="seconds")
+
+    def _close_stale_active(self, now: float):
+        with self._conn:
+            self._conn.execute("""
+                UPDATE alarm_episode
+                   SET ended_at = ?, status = 'unknown', end_reason = 'server_restart',
+                       duration_seconds = MAX(0, ? - started_at)
+                 WHERE status = 'active'
+            """, (now, now))
+
+    def _cleanup(self, now=None, force=False):
+        if not self.enabled:
+            return 0
+        now = float(self._now() if now is None else now)
+        if not force and now < self._next_cleanup_at:
+            return 0
+        cutoff = now - self.retention_days * 86400
+        with self._conn:
+            cur = self._conn.execute("""
+                DELETE FROM alarm_episode
+                 WHERE status != 'active' AND COALESCE(ended_at, started_at) < ?
+            """, (cutoff,))
+            deleted = cur.rowcount
+            if deleted:
+                self._conn.execute("PRAGMA incremental_vacuum(1000)")
+        self._next_cleanup_at = now + 3600
+        if deleted:
+            self.log.info(f"已清除 {deleted} 筆超過 {self.retention_days} 天的警報 episode")
+        return deleted
+
+    def on_alarm(self, device: str, alarms: list, source_ts=None):
+        """接收全量警報快照，建立、更新或結束各警報 episode。"""
+        if not self.enabled:
+            return
+        device = str(device)
+        now = float(self._now())
+        self._cleanup(now)
+        source_ts = self._source_ts(source_ts)
+        current = {self._key(alarm): alarm for alarm in alarms}
+        previous = self._active.get(device, {})
+        first_snapshot = device not in self._seen_devices
+        next_active = {}
+
+        try:
+            with self._conn:
+                for key, alarm in current.items():
+                    cp, code = key
+                    prio = self._prio(alarm.get("prio"))
+                    text = str(alarm.get("text", ""))
+                    episode_id = previous.get(key)
+                    if episode_id is None:
+                        start_reason = "observed_active" if first_snapshot else "appeared"
+                        cur = self._conn.execute("""
+                            INSERT INTO alarm_episode (
+                                device_id, cp, code, prio, text, started_at,
+                                source_started_at, status, start_reason
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                        """, (device, cp, code, prio, text, now, source_ts, start_reason))
+                        episode_id = cur.lastrowid
+                    else:
+                        # 作用期間警報文字或 MEDIBUS 優先值變化時保留最新值，不另拆一段。
+                        self._conn.execute("""
+                            UPDATE alarm_episode SET prio = ?, text = ?
+                             WHERE episode_id = ? AND status = 'active'
+                        """, (prio, text, episode_id))
+                    next_active[key] = episode_id
+
+                for key, episode_id in previous.items():
+                    if key in current:
+                        continue
+                    self._conn.execute("""
+                        UPDATE alarm_episode
+                           SET ended_at = ?, source_ended_at = ?, status = 'cleared',
+                               end_reason = 'cleared', duration_seconds = MAX(0, ? - started_at)
+                         WHERE episode_id = ? AND status = 'active'
+                    """, (now, source_ts, now, episode_id))
+        except sqlite3.Error as exc:
+            self.log.warning(f"{device} 警報 SQLite 寫入失敗: {exc}")
+            return
+
+        self._active[device] = next_active
+        self._seen_devices.add(device)
+
+    def on_disconnect(self, device: str, reason: str = "device_offline"):
+        """裝置離線不能當成警報解除；結束時間記為未知來源。"""
+        if not self.enabled:
+            return
+        device = str(device)
+        active = self._active.get(device, {})
+        if not active:
+            self._active.pop(device, None)
+            self._seen_devices.discard(device)
+            return
+        now = float(self._now())
+        try:
+            with self._conn:
+                for episode_id in active.values():
+                    self._conn.execute("""
+                        UPDATE alarm_episode
+                           SET ended_at = ?, status = 'unknown', end_reason = ?,
+                               duration_seconds = MAX(0, ? - started_at)
+                         WHERE episode_id = ? AND status = 'active'
+                    """, (now, reason, now, episode_id))
+        except sqlite3.Error as exc:
+            self.log.warning(f"{device} 離線狀態寫入警報 SQLite 失敗: {exc}")
+            return
+        self._active.pop(device, None)
+        self._seen_devices.discard(device)
+
+    def forget(self, device: str):
+        """管理員移除裝置只清記憶體狀態；SQLite 歷史保留到七天期限。"""
+        self.on_disconnect(device, reason="device_removed")
+        self._active.pop(str(device), None)
+        self._seen_devices.discard(str(device))
+
+    def _row_to_dict(self, row, now=None):
+        now = float(self._now() if now is None else now)
+        ended = row["ended_at"]
+        duration = row["duration_seconds"]
+        if row["status"] == "active":
+            duration = max(0.0, now - row["started_at"])
+        return {
+            "episode_id": row["episode_id"],
+            "device_id": row["device_id"],
+            "cp": row["cp"],
+            "code": row["code"],
+            "prio": row["prio"],
+            "text": row["text"],
+            "started_at": self._iso(row["started_at"]),
+            "source_started_at": self._iso(row["source_started_at"]),
+            "ended_at": self._iso(ended),
+            "source_ended_at": self._iso(row["source_ended_at"]),
+            "duration_seconds": round(float(duration or 0), 1),
+            "status": row["status"],
+            "start_reason": row["start_reason"],
+            "end_reason": row["end_reason"],
+        }
+
+    def recent(self, device: str, limit: int = 50) -> list:
+        """回傳該機台最近警報 episode，新到舊；不含病歷號。"""
+        if not self.enabled:
+            return []
+        limit = max(1, min(100, int(limit)))
+        now = float(self._now())
+        self._cleanup(now)
+        try:
+            rows = self._conn.execute("""
+                SELECT * FROM alarm_episode
+                 WHERE device_id = ?
+                 ORDER BY started_at DESC, episode_id DESC LIMIT ?
+            """, (str(device), limit)).fetchall()
+            return [self._row_to_dict(row, now) for row in rows]
+        except sqlite3.Error as exc:
+            self.log.warning(f"{device} 警報 SQLite 讀取失敗: {exc}")
+            return []
+
+    def export_csv(self, device: str):
+        """輸出該機台七天內 episode CSV；沒有資料時回傳 None。"""
+        if not self.enabled:
+            return None
+        now = float(self._now())
+        self._cleanup(now)
+        try:
+            db_rows = self._conn.execute("""
+                SELECT * FROM alarm_episode
+                 WHERE device_id = ?
+                 ORDER BY started_at, episode_id
+            """, (str(device),)).fetchall()
+        except sqlite3.Error as exc:
+            self.log.warning(f"{device} 警報 SQLite 匯出失敗: {exc}")
+            return None
+        if not db_rows:
+            return None
+        rows = [self._row_to_dict(row, now) for row in db_rows]
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=EXPORT_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue()
+
+    def close(self, reason: str = "server_shutdown"):
+        if not self.enabled:
+            return
+        for device in list(self._active):
+            self.on_disconnect(device, reason=reason)
+        self._conn.close()
+        self._conn = None

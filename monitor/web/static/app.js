@@ -328,7 +328,7 @@ function buildCard(dev) {
         <div class="loop-legend"><span>最新</span><span>前 1 次</span><span>前 2 次</span></div>
       </section>
       <section class="detail-panel alarm-history-panel">
-        <div class="detail-panel-head"><h3>警報紀錄</h3><span class="panel-meta">最近 50 筆</span></div>
+        <div class="detail-panel-head"><h3>警報紀錄</h3><span class="panel-meta">近 7 天 · 最近 50 次</span></div>
         <div class="alarm-history-list"><div class="panel-empty">尚無警報紀錄</div></div>
       </section>
       <section class="detail-panel prediction-panel">
@@ -840,30 +840,59 @@ function onParams(dev, m) {
   fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
 }
 
-function renderAlarmHistory(dev, events) {
+function compactAlarmTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const now = new Date();
+  const pad = (number) => String(number).padStart(2, "0");
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  if (date.toDateString() === now.toDateString()) return clock;
+  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${clock.slice(0, 5)}`;
+}
+
+function alarmDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  if (value < 60) return `${value} 秒`;
+  if (value < 3600) return `${Math.floor(value / 60)}分${value % 60}秒`;
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return `${hours}時${minutes}分`;
+}
+
+function renderAlarmHistory(dev, episodes) {
   const el = dev.alarmHistoryEl;
   if (!el) return;
   el.innerHTML = "";
-  if (!events.length) {
-    el.innerHTML = '<div class="panel-empty">尚無警報紀錄</div>';
+  if (!episodes.length) {
+    el.innerHTML = '<div class="panel-empty">最近 7 天尚無警報紀錄</div>';
     return;
   }
-  for (const event of events) {
-    const alarm = Object.assign({}, event, { prio: Number(event.prio || 0) });
+  for (const episode of episodes) {
+    const alarm = Object.assign({}, episode, { prio: Number(episode.prio || 0) });
     const classified = RMAlarm.classify(alarm);
     const row = document.createElement("div");
-    row.className = `alarm-history-row lvl-${classified.level}`;
+    row.className = `alarm-history-row lvl-${classified.level} ${episode.status || "unknown"}`;
+    row.title = `${classified.name}\n開始：${episode.started_at || "—"}\n` +
+      `結束：${episode.ended_at || (episode.status === "active" ? "持續中" : "不明")}`;
 
     const time = document.createElement("span");
     time.className = "alarm-history-time";
-    time.textContent = event.time || "—";
-    const state = document.createElement("span");
-    state.className = `alarm-history-event ${event.event === "cleared" ? "cleared" : "appeared"}`;
-    state.textContent = event.event === "cleared" ? "解除" : "發生";
+    time.textContent = compactAlarmTime(episode.started_at);
+    const body = document.createElement("span");
+    body.className = "alarm-history-body";
     const name = document.createElement("span");
     name.className = "alarm-history-name";
     name.textContent = classified.name;
-    row.append(time, state, name);
+    const duration = document.createElement("span");
+    duration.className = "alarm-history-duration";
+    duration.textContent = alarmDuration(episode.duration_seconds);
+    body.append(name, duration);
+    const state = document.createElement("span");
+    state.className = `alarm-history-event ${episode.status || "unknown"}`;
+    state.textContent = episode.status === "active" ? "持續中" :
+      episode.status === "cleared" ? "已解除" : "結束不明";
+    row.append(time, body, state);
     el.appendChild(row);
   }
 }
@@ -878,7 +907,7 @@ async function loadAlarmHistory(dev) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!dev.big || seq !== dev.alarmHistorySeq) return;
-    renderAlarmHistory(dev, Array.isArray(data.events) ? data.events : []);
+    renderAlarmHistory(dev, Array.isArray(data.episodes) ? data.episodes : []);
   } catch (e) {
     if (dev.big && seq === dev.alarmHistorySeq) {
       dev.alarmHistoryEl.innerHTML = '<div class="panel-empty error">警報紀錄讀取失敗</div>';

@@ -58,7 +58,8 @@ class TelemetryHub:
     def __init__(self, offline_timeout: float = 5.0, max_devices: int = 16,
                  sys_history_max: int = 720, sys_log_dir: str = "",
                  sys_csv_interval: float = 60.0, max_viewers: int = 50,
-                 alarm_log_dir: str = ""):
+                 alarm_db_path: str = "", alarm_retention_days: int = 7,
+                 alarm_log_dir: str = None):
         self.log = logging.getLogger("hub")
         self.offline_timeout = offline_timeout
         self.max_devices = max_devices
@@ -74,7 +75,10 @@ class TelemetryHub:
             except OSError as e:
                 self.log.warning(f"系統狀態 CSV 目錄無法建立，停用落地: {e}")
                 self.sys_log_dir = ""
-        self.alarm_log = AlarmLog(alarm_log_dir)   # 警報出現/解除事件落地（見 alarm_log.py）
+        # alarm_log_dir 僅保留舊呼叫端相容性；新設定一律直接指定 SQLite 路徑。
+        if not alarm_db_path and alarm_log_dir:
+            alarm_db_path = os.path.join(alarm_log_dir, "alarm_history.sqlite3")
+        self.alarm_log = AlarmLog(alarm_db_path, alarm_retention_days)
         self.devices = {}          # device_id -> DeviceState
         self.viewers = set()       # 每個瀏覽器一個 asyncio.Queue
         self._seq = 0
@@ -124,7 +128,7 @@ class TelemetryHub:
                 st.sys_history.append(msg)   # 記憶體歷史（趨勢圖）
                 self._append_sys_csv(st, msg)  # 長期落地（Excel 事後分析）
             elif t == "alarm":
-                self.alarm_log.on_alarm(device, msg.get("alarms", []))  # 出現/解除事件落地
+                self.alarm_log.on_alarm(device, msg.get("alarms", []), msg.get("ts"))
         elif t not in STREAM_TYPES:
             self.log.info(f"{device} 未知訊息類型（忽略）: {t}")
             return
@@ -137,6 +141,7 @@ class TelemetryHub:
         if st is None or st.conn_seq != conn_seq or not st.online:
             return                       # 已被新連線取代
         st.online = False
+        self.alarm_log.on_disconnect(device)
         self.log.info(f"裝置離線: {device}")
         audit("device_offline", device=device, reason="disconnected")
         self.broadcast({"type": "link", "device": device, "online": False})
@@ -149,7 +154,7 @@ class TelemetryHub:
     def remove_device(self, device: str) -> str:
         """管理頁移除離線裝置（PROTOCOL.md /api/admin/devices）。
         回傳 "ok"｜"online"（線上不可移除）｜"unknown"。
-        只清伺服器記憶體狀態並廣播 device_removed；CSV 落地檔保留（歷史紀錄）。
+        只清伺服器記憶體狀態並廣播 device_removed；SQLite 歷史保留到期限。
         裝置之後重新連上會走 device_hello 自動回來。"""
         st = self.devices.get(device)
         if st is None:
@@ -174,13 +179,24 @@ class TelemetryHub:
             return None
         return os.path.join(self.sys_log_dir, f"sys_{_safe_name(device)}.csv")
 
-    def alarm_csv_path(self, device: str):
-        """該裝置警報歷史 CSV 的檔案路徑（供下載端點）；未啟用落地回傳 None"""
-        return self.alarm_log.csv_path(device)
+    def alarm_history_csv(self, device: str):
+        """從 SQLite 即時產生該裝置的七天警報 episode CSV。"""
+        return self.alarm_log.export_csv(device)
 
     def alarm_history(self, device: str, limit: int = 50) -> list:
-        """該裝置最新警報事件（新到舊；詳細監測畫面使用）。"""
+        """該裝置最新警報 episode（新到舊；詳細監測畫面使用）。"""
         return self.alarm_log.recent(device, limit)
+
+    def close(self):
+        """關閉 CSV handle 與 SQLite，供伺服器正常停止及測試清理。"""
+        for st in self.devices.values():
+            if st.sys_csv is not None:
+                try:
+                    st.sys_csv.close()
+                except OSError:
+                    pass
+                st.sys_csv = None
+        self.alarm_log.close()
 
     def _append_sys_csv(self, st: DeviceState, msg: dict):
         """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）。
@@ -222,6 +238,7 @@ class TelemetryHub:
             for st in self.devices.values():
                 if st.online and now - st.last_seen > self.offline_timeout:
                     st.online = False
+                    self.alarm_log.on_disconnect(st.device)
                     self.log.warning(f"裝置逾時離線: {st.device}")
                     audit("device_offline", device=st.device, reason="timeout")
                     self.broadcast({"type": "link", "device": st.device, "online": False})

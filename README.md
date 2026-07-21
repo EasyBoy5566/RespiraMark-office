@@ -73,6 +73,10 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `ingest_hello_timeout` | 10.0 | 連線後幾秒沒收到合法 hello 就斷線 |
 | `ingest_idle_timeout` | 60.0 | hello 通過後幾秒沒資料就斷線（Pi 每 2 秒 ping，留有餘裕） |
 | `max_viewers` | 50 | 同時瀏覽器觀看端數上限，超過拒絕新連線（503） |
+| `alarm_db_path` | `alarm_logs/alarm_history.sqlite3` | 全部機台共用的警報歷史 SQLite；畫面與匯出仍可依機台獨立查詢 |
+| `alarm_retention_days` | 7 | 已結束警報保留天數；仍在作用中的警報不會因超過期限被刪除 |
+
+警報歷史只保存機台編號、警報內容與起訖時間，不保存病人代碼、波形或量測值。依目前資源規劃，資料庫只保留本機最近 7 天，**不納入備份**；舊版 `alarm_logs/*.csv` 不會自動刪除或匯入 SQLite。
 
 ### 每台 Pi 獨立存取權杖（建議部署醫院前改用）
 
@@ -110,7 +114,7 @@ python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩
 |---|---|
 | `tools/setup_service.ps1` | 註冊 Windows 工作排程器：開機自動啟動＋失敗 1 分鐘內自動重啟，取代手動雙擊 `start_server.bat` |
 | `tools/lock_permissions.ps1` | 用 `icacls` 鎖定 accounts.json/devices.json/config.json/certs/logs 等敏感檔案，只留服務帳號與管理員可讀寫 |
-| `tools/backup.ps1` | 備份設定/帳號/裝置權杖/憑證/日誌成一個帶日期的 zip（**不含 `ca.key`**，那個要離線保存，見下）；建議排程每日執行 |
+| `tools/backup.ps1` | 備份設定/帳號/裝置權杖/憑證/系統與審計日誌成一個帶日期的 zip（**不含 `ca.key`，也不含警報 SQLite**）；建議排程每日執行 |
 
 **時間同步**：伺服器與每一台 Pi 都要跟院內同一個時間來源同步（NTP），否則警報/審計
 日誌的時間戳記不可信、事後回溯對不上。部署時請跟資訊室確認院內 NTP 伺服器位址，

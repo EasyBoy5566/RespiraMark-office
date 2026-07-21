@@ -89,18 +89,19 @@ async def admin_syslog(request):
 
 
 async def admin_alarmlog(request):
-    """GET /api/admin/alarmlog/{device} → 下載該裝置的警報歷史 CSV（W-302）"""
+    """GET /api/admin/alarmlog/{device} → 從 SQLite 匯出該裝置警報 CSV。"""
     hub = request.app["hub"]
     device = request.match_info["device"]
-    path = hub.alarm_csv_path(device)
-    if not path or not os.path.exists(path):
+    content = hub.alarm_history_csv(device)
+    if not content:
         raise web.HTTPNotFound(
-            text='{"error": "尚無 CSV 紀錄（未啟用落地或還沒發生過警報）"}',
+            text='{"error": "最近七天尚無警報紀錄"}',
             content_type="application/json")
     audit("admin_download_alarmlog", actor=_actor(request), device=device)
-    return web.FileResponse(path, headers={
+    safe_device = "".join(c if c.isalnum() or c in "-_." else "_" for c in device)
+    return web.Response(body=("\ufeff" + content).encode("utf-8"), headers={
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": f'attachment; filename="{os.path.basename(path)}"',
+        "Content-Disposition": f'attachment; filename="alarm_{safe_device or "device"}.csv"',
     })
 
 
@@ -122,7 +123,7 @@ async def sys_history(request):
 
 
 async def alarm_history(request):
-    """GET /api/alarm-history/{device} → 最近警報事件（viewer/admin 均可看）。"""
+    """GET /api/alarm-history/{device} → 最近警報 episode（viewer/admin 均可看）。"""
     hub = request.app["hub"]
     device = request.match_info["device"]
     try:
@@ -132,7 +133,7 @@ async def alarm_history(request):
             text='{"error": "limit 必須是整數"}', content_type="application/json")
     limit = max(1, min(100, limit))
     return web.json_response({"device": device,
-                              "events": hub.alarm_history(device, limit)})
+                              "episodes": hub.alarm_history(device, limit)})
 
 
 def _origin_allowed(request) -> bool:
