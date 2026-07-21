@@ -276,6 +276,8 @@ async def run_checks():
                 check(f"靜態資源 {path}", r.status == 200)
         async with s.get(f"{BASE}/history/smoke-01") as r:
             check("未登入 /history 回 401", r.status == 401)
+        async with s.get(f"{BASE}/api/alarm-history/smoke-02") as r:
+            check("未登入警報紀錄 API 回 401", r.status == 401)
         try:
             await s.ws_connect(f"{BASE}/ws")
             check("未登入 /ws 被拒", False)
@@ -298,6 +300,9 @@ async def run_checks():
         app_js = await r.text() if r.status == 200 else ""
         check("前端含呼吸器警報音與卡片靜音鈕",
               "mute-btn" in app_js and "unlockAudio" in app_js)
+        check("單床詳細畫面含 LOOP、警報紀錄與預測模組插槽",
+              "loop-select" in app_js and "loadAlarmHistory" in app_js
+              and "拔管成功率" in app_js and "呼吸不同步預測" in app_js)
     async with authed.get(f"{BASE}/api/me") as r:
         me = await r.json() if r.status == 200 else {}
         check("/api/me 回報登入者與角色",
@@ -400,6 +405,13 @@ async def run_checks():
               r.status == 200 and r.url.path == "/")
     async with viewer.get(f"{BASE}/api/admin/accounts") as r:
         check("viewer 存取管理 API 回 403", r.status == 403)
+    async with viewer.get(f"{BASE}/api/alarm-history/smoke-02?limit=2") as r:
+        alarm_history_data = await r.json() if r.status == 200 else {}
+        alarm_history_events = alarm_history_data.get("events") or []
+        check("viewer 可讀取最近警報紀錄",
+              r.status == 200 and 1 <= len(alarm_history_events) <= 2
+              and all("patient" not in event for event in alarm_history_events),
+              str(alarm_history_events)[:120])
     await viewer.close()
 
     async with authed.get(f"{BASE}/admin") as r:

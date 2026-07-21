@@ -121,6 +121,20 @@ async def sys_history(request):
     return web.json_response({"device": device, "samples": hub.sys_history(device)})
 
 
+async def alarm_history(request):
+    """GET /api/alarm-history/{device} → 最近警報事件（viewer/admin 均可看）。"""
+    hub = request.app["hub"]
+    device = request.match_info["device"]
+    try:
+        limit = int(request.query.get("limit", "50"))
+    except ValueError:
+        raise web.HTTPBadRequest(
+            text='{"error": "limit 必須是整數"}', content_type="application/json")
+    limit = max(1, min(100, limit))
+    return web.json_response({"device": device,
+                              "events": hub.alarm_history(device, limit)})
+
+
 def _origin_allowed(request) -> bool:
     """Origin 存在且 host 與本站不同 → 擋（跨站 WebSocket 挾持）；
     不存在則放行（相容非瀏覽器客戶端，例如既有測試工具與未來可能的
@@ -179,6 +193,7 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/history/{device}", sys_history)
+    app.router.add_get("/api/alarm-history/{device}", alarm_history)
     app.router.add_get("/api/admin/accounts", admin_accounts)
     app.router.add_delete("/api/admin/devices/{device}", admin_remove_device)
     app.router.add_get("/api/admin/syslog/{device}", admin_syslog)

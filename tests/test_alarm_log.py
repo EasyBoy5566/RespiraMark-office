@@ -95,6 +95,20 @@ class AlarmLogTest(unittest.TestCase):
             content = f.read()
         self.assertNotIn("patient", content.lower())
 
+    def test_recent_returns_newest_first_and_honours_limit(self):
+        log = AlarmLog(self.dir)
+        for code in ("10", "11", "12"):
+            log.on_alarm("pi-01", [{"cp": 1, "code": code,
+                                      "prio": 1, "text": f"Alarm {code}"}])
+        rows = log.recent("pi-01", limit=2)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row["code"] for row in rows], ["11", "12"])
+        self.assertEqual([row["event"] for row in rows], ["cleared", "appeared"])
+
+    def test_recent_without_log_returns_empty(self):
+        self.assertEqual(AlarmLog("").recent("pi-01"), [])
+        self.assertEqual(AlarmLog(self.dir).recent("pi-01"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

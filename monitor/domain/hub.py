@@ -178,6 +178,10 @@ class TelemetryHub:
         """該裝置警報歷史 CSV 的檔案路徑（供下載端點）；未啟用落地回傳 None"""
         return self.alarm_log.csv_path(device)
 
+    def alarm_history(self, device: str, limit: int = 50) -> list:
+        """該裝置最新警報事件（新到舊；詳細監測畫面使用）。"""
+        return self.alarm_log.recent(device, limit)
+
     def _append_sys_csv(self, st: DeviceState, msg: dict):
         """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）。
         依 sys_csv_interval 節流：長期 log 不需要跟即時畫面一樣密（預設 5s），

@@ -13,6 +13,7 @@ import csv
 import logging
 import os
 import time
+from collections import deque
 
 CSV_FIELDS = ("time", "event", "cp", "code", "prio", "text")
 
@@ -46,6 +47,25 @@ class AlarmLog:
         if not self.log_dir:
             return None
         return os.path.join(self.log_dir, f"alarm_{_safe_name(device)}.csv")
+
+    def recent(self, device: str, limit: int = 50) -> list:
+        """回傳最新警報事件（新到舊），供單床詳細畫面顯示。
+
+        僅讀取既有 CSV 欄位，不含病人代碼；以 deque 限制記憶體，即使長期
+        紀錄很大也只保留最後 ``limit`` 筆。檔案未啟用／不存在／暫時讀不到時
+        回傳空陣列，詳細畫面顯示空狀態即可，不讓紀錄問題影響即時監測。
+        """
+        limit = max(1, min(100, int(limit)))
+        path = self.csv_path(device)
+        if not path or not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", newline="", encoding="utf-8") as f:
+                rows = deque(csv.DictReader(f), maxlen=limit)
+            return list(reversed([dict(row) for row in rows]))
+        except (OSError, csv.Error) as e:
+            self.log.warning(f"{device} 警報歷史讀取失敗: {e}")
+            return []
 
     def on_alarm(self, device: str, alarms: list):
         """收到一則 alarm 全量快照：跟上次已知集合比對，記錄新增/解除的部分。

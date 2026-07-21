@@ -258,10 +258,10 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
   cursor: pointer;
 }
 .card:hover { border-color: var(--hover); }
-/* 離線醒目樣式（IMPROVEMENT_PLAN.md W-304）：紅框＋紅底 header 一眼可辨，
+/* 離線醒目樣式（IMPROVEMENT_PLAN.md W-304）：紅框＋淡紅 header 一眼可辨，
  * 波形區維持原始亮度所在仍讀得到最後數值，只把整張卡稍微壓暗以示「非即時」 */
 .card.pi-offline { border-color: var(--red); filter: brightness(0.85); }
-.card.pi-offline .card-head { border-left: 4px solid var(--red); background: var(--alarm-bg); }
+.card.pi-offline .card-head { background: var(--alarm-bg); }
 
 .card-head {
   display: flex; align-items: center; gap: 8px;
@@ -423,15 +423,35 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
 }
 
 /* ── 放大檢視（overlay）─────────────────────────────────── */
+body.detail-open { overflow: hidden; }
 .overlay {
   position: fixed; inset: 0; z-index: 20;
   background: var(--overlay-bg);
-  padding: 16px;
-  overflow-y: auto;
+  padding: 10px;
+  overflow: hidden;
 }
-.overlay .card { cursor: default; max-width: 1400px; margin: 0 auto; overflow: visible; }
-/* 放大時內容常高過視窗，狀態列固定在頂端，捲動看明細也看得到連線狀態 */
-.card.big .card-head { position: sticky; top: 0; z-index: 5; }
+.overlay .card { cursor: default; max-width: none; margin: 0; }
+.card.big {
+  width: 100%;
+  height: calc(100vh - 20px);
+  height: calc(100dvh - 20px);
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "head head"
+    "main measured"
+    "lower lower";
+  gap: 8px;
+  padding: 0 8px 8px;
+  overflow: hidden;
+}
+.card.big .card-head {
+  grid-area: head;
+  margin-inline: -8px;
+  min-height: 42px;
+  z-index: 5;
+}
 .close-btn {
   font-size: 15px; font-weight: bold;
   color: var(--text-secondary);
@@ -443,27 +463,199 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
 }
 .close-btn:hover { background: var(--hover); color: var(--text-primary); }
 
-/* 放大模式才顯示的完整資料區 */
-.detail { display: none; }
-.card.big .detail {
+/* 上半部左 2/3：三條波形 + 設定值。 */
+.card.big .monitor-main {
+  grid-area: main;
+  min-width: 0; min-height: 0;
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 12px;
-  padding: 0 10px 12px;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  overflow: hidden;
 }
-@media (max-width: 900px) {
-  .card.big .detail { grid-template-columns: 1fr; }
+.card.big .waves {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px 7px 3px;
 }
-.detail h3 {
-  font-size: 14px; color: var(--text-label);
+.card.big .wave-row { min-height: 0; margin-bottom: 0; }
+.card.big .wave-row canvas { height: 100%; min-height: 0; }
+.card.big .strip-cap {
+  display: block;
+  padding: 2px 9px 0;
+  border-top: 1px solid var(--divider);
+}
+.card.big .param-strip {
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  padding: 3px 7px 6px;
+}
+
+/* 上半部右 1/3：測量值；內容過多只在區塊內捲動。 */
+.detail, .detail-lower { display: none; }
+.card.big .detail {
+  grid-area: measured;
+  display: block;
+  min-width: 0; min-height: 0;
+}
+.detail-panel {
+  min-width: 0; min-height: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.measured-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+}
+.detail-panel h3 {
+  font-size: 14px;
+  color: var(--text-label);
+  margin: 0;
+}
+.measured-panel > h3 {
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--divider);
-  padding: 8px 0 4px; margin-bottom: 6px;
+  padding-bottom: 6px;
+  margin-bottom: 5px;
 }
-.kv-table { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 14px; }
+.measured-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.mode-summary {
+  flex: 0 0 auto;
+  display: flex; align-items: baseline; gap: 8px;
+  border-top: 1px solid var(--divider);
+  padding-top: 6px; margin-top: 5px;
+}
+.detail-label { color: var(--text-label); font-size: 12px; }
+.mode-line { font-size: 14px; font-weight: bold; }
+.dev-info-line {
+  flex: 0 0 auto;
+  font-size: 11px; color: var(--text-disabled);
+  padding: 4px 0 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.kv-table {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 3px 12px;
+}
 .kv-table .row { display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0; border-bottom: 1px dotted var(--divider); }
 .kv-table .row .k { color: var(--text-secondary); }
 .kv-table .row .v { font-weight: bold; font-variant-numeric: tabular-nums; }
-.dev-info-line { font-size: 13px; color: var(--text-disabled); padding: 6px 0; }
+
+/* 下半部三等分：單一 LOOP、警報紀錄、未來預測模組。 */
+.card.big .detail-lower {
+  grid-area: lower;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0; min-height: 0;
+}
+.detail-panel-head {
+  flex: 0 0 auto;
+  min-height: 34px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--divider);
+}
+.panel-meta { font-size: 11px; color: var(--text-disabled); }
+
+.loop-panel, .alarm-history-panel, .prediction-panel {
+  display: flex;
+  flex-direction: column;
+}
+.loop-select {
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.loop-select:focus { outline: none; border-color: var(--focus); }
+.loop-chart { position: relative; flex: 1 1 auto; min-height: 0; }
+.loop-chart canvas { display: block; width: 100%; height: 100%; }
+.loop-empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-disabled); font-size: 13px;
+  pointer-events: none;
+}
+.loop-legend {
+  flex: 0 0 auto;
+  display: flex; justify-content: center; gap: 16px;
+  padding: 2px 6px 5px;
+  color: var(--text-label); font-size: 10px;
+}
+.loop-legend span::before {
+  content: ""; display: inline-block;
+  width: 14px; height: 2px; margin-right: 4px; vertical-align: middle;
+  background: var(--c-wave);
+}
+.loop-legend span:nth-child(2)::before { opacity: 0.45; }
+.loop-legend span:nth-child(3)::before { opacity: 0.22; }
+
+.alarm-history-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.alarm-history-row {
+  display: grid;
+  grid-template-columns: max-content 38px minmax(0, 1fr);
+  align-items: center; gap: 7px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+}
+.alarm-history-row.lvl-1 .alarm-history-name { color: var(--red); }
+.alarm-history-row.lvl-2 .alarm-history-name { color: var(--amber); }
+.alarm-history-row.lvl-3 .alarm-history-name { color: var(--sys-line); }
+.alarm-history-time { color: var(--text-label); font-variant-numeric: tabular-nums; }
+.alarm-history-event { font-weight: bold; color: var(--red); }
+.alarm-history-event.cleared { color: var(--green); }
+.alarm-history-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-empty {
+  min-height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; color: var(--text-disabled); font-size: 13px; text-align: center;
+}
+.panel-empty.error { color: var(--red); }
+
+.prediction-slots {
+  flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 7px; padding: 7px;
+}
+.prediction-slot {
+  min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--card-bg);
+  border: 1px dashed var(--divider);
+  border-radius: 5px;
+}
+.prediction-name { font-size: 14px; font-weight: bold; }
+.prediction-state { margin-top: 5px; color: var(--text-disabled); font-size: 12px; }
+.prediction-note {
+  flex: 0 0 auto; padding: 0 7px 6px;
+  color: var(--text-disabled); font-size: 10px; text-align: center;
+}
+
+/* 小型視窗改為直向工作台，避免三欄被壓到無法判讀。 */
+@media (max-width: 1100px), (max-height: 650px) {
+  .overlay { overflow-y: auto; }
+  .card.big {
+    height: auto; min-height: calc(100dvh - 20px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 560px 340px auto;
+    grid-template-areas: "head" "main" "measured" "lower";
+    overflow: visible;
+  }
+  .card.big .detail-lower { grid-template-columns: minmax(0, 1fr); }
+  .card.big .detail-lower > .detail-panel { min-height: 330px; }
+}
 
 /* ── Pi 系統狀態趨勢（管理頁 /admin 使用，繪圖在 sys.js）────── */
 .sys-info-line {

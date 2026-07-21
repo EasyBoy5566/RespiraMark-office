@@ -27,7 +27,22 @@ const MAX_BUF    = 4.0;     // 緩衝上限（秒）：分頁背景太久直接�
 const RATE_WIN   = 6.0;     // 秒，取樣率估計的滑動視窗（用發送端 ts）
 const MUTE_SEC   = 120;     // 靜音鈕：按一次靜音的秒數（再按一次取消）
 let TRIG_COLOR = "";        // 依主題由 refreshThemeColors() 填入
+const LOOP_BREATHS = 3;
 let GRID_COLOR = "";
+
+const LOOP_TYPES = {
+  pv: { label: "P-V LOOP", xKey: "p", xLabel: "Paw (cmH₂O)", xMin: -5, xMax: 45,
+        yKey: "v", yLabel: "Volume (mL)", yMin: 0, yMax: 1000 },
+  fv: { label: "F-V LOOP", xKey: "v", xLabel: "Volume (mL)", xMin: 0, xMax: 1000,
+        yKey: "f", yLabel: "Flow (L/min)", yMin: -50, yMax: 50 },
+  pf: { label: "P-F LOOP", xKey: "p", xLabel: "Paw (cmH₂O)", xMin: -5, xMax: 45,
+        yKey: "f", yLabel: "Flow (L/min)", yMin: -50, yMax: 50 },
+};
+let selectedLoopType = "pv";
+try {
+  const savedLoopType = localStorage.getItem("rm-loop-type");
+  if (savedLoopType && LOOP_TYPES[savedLoopType]) selectedLoopType = savedLoopType;
+} catch (e) { /* Private browsing: keep default. */ }
 
 const grid = document.getElementById("grid");
 const overlay = document.getElementById("overlay");
@@ -60,6 +75,7 @@ function applyTheme(theme) {
   monoBtn.classList.toggle("active", theme === "mono");   // 監視器模式啟用中 → 選單項目highlight
   refreshThemeColors();
   devices.forEach(setupCanvases);   // 用新顏色從歷史重播波形
+  devices.forEach(drawLoop);
   refitModeChips();                 // 版面（磚格寬）可能改變 → Mode 文字重新量寬縮字
 }
 
@@ -208,6 +224,14 @@ function ensureDev(id) {
     alarmLevel: 0,        // 目前最嚴重警報等級（0 = 無 level 1/2 警報）
     muteUntil: 0,         // 靜音截止時間戳（ms）；按一次靜音 MUTE_SEC 秒，再按取消
     muteBtn: null,        // 右上角靜音鈕（buildCard 填入）
+    loopStarted: false,
+    loopCurrent: [],
+    loopBreaths: [],
+    loopCanvas: null,
+    loopEmpty: null,
+    loopSelect: null,
+    alarmHistoryEl: null,
+    alarmHistorySeq: 0,
   };
   buildCard(dev);
   devices.set(id, dev);
@@ -231,15 +255,55 @@ function buildCard(dev) {
               title="靜音警報2分鐘">🔔</button>
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
-    <div class="waves"></div>
-    <div class="strip-cap">設定值</div>
-    <div class="param-strip"></div>
+    <div class="monitor-main">
+      <div class="waves"></div>
+      <div class="strip-cap">設定值</div>
+      <div class="param-strip"></div>
+    </div>
     <div class="detail">
-      <div><h3>量測值</h3><div class="kv-table measured"></div></div>
-      <div>
-        <h3>模式</h3><div class="mode-line" style="font-size:14px"></div>
+      <section class="detail-panel measured-panel">
+        <h3>測量值</h3>
+        <div class="measured-scroll"><div class="kv-table measured"></div></div>
+        <div class="mode-summary">
+          <span class="detail-label">模式</span><span class="mode-line">—</span>
+        </div>
         <div class="dev-info-line"></div>
-      </div>
+      </section>
+    </div>
+    <div class="detail-lower">
+      <section class="detail-panel loop-panel">
+        <div class="detail-panel-head">
+          <h3>LOOP</h3>
+          <select class="loop-select" aria-label="選擇 LOOP 類型">
+            <option value="pv">P-V LOOP</option>
+            <option value="fv">F-V LOOP</option>
+            <option value="pf">P-F LOOP</option>
+          </select>
+        </div>
+        <div class="loop-chart">
+          <canvas></canvas>
+          <div class="loop-empty">等待完整呼吸週期</div>
+        </div>
+        <div class="loop-legend"><span>最新</span><span>前 1 次</span><span>前 2 次</span></div>
+      </section>
+      <section class="detail-panel alarm-history-panel">
+        <div class="detail-panel-head"><h3>警報紀錄</h3><span class="panel-meta">最近 50 筆</span></div>
+        <div class="alarm-history-list"><div class="panel-empty">尚無警報紀錄</div></div>
+      </section>
+      <section class="detail-panel prediction-panel">
+        <div class="detail-panel-head"><h3>預測模組</h3><span class="panel-meta">預留介面</span></div>
+        <div class="prediction-slots">
+          <div class="prediction-slot">
+            <div class="prediction-name">拔管成功率</div>
+            <div class="prediction-state">模組尚未接入</div>
+          </div>
+          <div class="prediction-slot">
+            <div class="prediction-name">呼吸不同步預測</div>
+            <div class="prediction-state">模組尚未接入</div>
+          </div>
+        </div>
+        <div class="prediction-note">目前不產生推估值</div>
+      </section>
     </div>`;
   card.querySelector(".dev-name").textContent = dev.id;
   dev.muteBtn = card.querySelector(".mute-btn");
@@ -265,6 +329,19 @@ function buildCard(dev) {
   const alarmBand = document.createElement("div");
   alarmBand.className = "wave-alarm hidden";
   waves.appendChild(alarmBand);
+
+  dev.loopCanvas = card.querySelector(".loop-chart canvas");
+  dev.loopEmpty = card.querySelector(".loop-empty");
+  dev.loopSelect = card.querySelector(".loop-select");
+  dev.loopSelect.value = selectedLoopType;
+  dev.loopSelect.addEventListener("change", (e) => {
+    e.stopPropagation();
+    selectedLoopType = dev.loopSelect.value;
+    try { localStorage.setItem("rm-loop-type", selectedLoopType); } catch (err) { /* ignore */ }
+    drawLoop(dev);
+  });
+  dev.loopSelect.addEventListener("click", (e) => e.stopPropagation());
+  dev.alarmHistoryEl = card.querySelector(".alarm-history-list");
 
   card.addEventListener("click", () => { if (!dev.big) expand(dev); });
   card.querySelector(".close-btn").addEventListener("click", (e) => {
@@ -307,7 +384,13 @@ function expand(dev) {
   dev.card.querySelector(".close-btn").classList.remove("hidden");
   overlay.appendChild(dev.card);
   overlay.classList.remove("hidden");
-  setupCanvases(dev);
+  document.body.classList.add("detail-open");
+  dev.loopSelect.value = selectedLoopType;
+  loadAlarmHistory(dev);
+  requestAnimationFrame(() => {
+    setupCanvases(dev);
+    drawLoop(dev);
+  });
 }
 
 function collapse(dev) {
@@ -315,6 +398,8 @@ function collapse(dev) {
   dev.card.classList.remove("big");
   dev.card.querySelector(".close-btn").classList.add("hidden");
   overlay.classList.add("hidden");
+  document.body.classList.remove("detail-open");
+  dev.alarmHistorySeq++;
   grid.appendChild(dev.card);
   sortGrid();
   setupCanvases(dev);
@@ -448,6 +533,126 @@ function drawSamples(dev, samples) {
   }
 }
 
+// ── 呼吸 LOOP：以 trigger 分割完整呼吸，保留最近三次供比較 ─────────
+function recordLoopSamples(dev, samples) {
+  let completed = false;
+  const minSamples = Math.max(10, Math.floor(dev.rate * 0.25));
+  const maxSamples = Math.max(200, Math.ceil(dev.rate * 20));
+
+  for (const sample of samples) {
+    if (sample.trig) {
+      if (dev.loopStarted && dev.loopCurrent.length >= minSamples) {
+        dev.loopBreaths.push(dev.loopCurrent);
+        if (dev.loopBreaths.length > LOOP_BREATHS) dev.loopBreaths.shift();
+        completed = true;
+      }
+      dev.loopCurrent = [];
+      dev.loopStarted = true;
+    }
+    if (dev.loopStarted) {
+      dev.loopCurrent.push(sample);   // 沿用播放佇列物件，避免每台每秒再配置約 100 個物件
+    }
+  }
+  if (dev.loopCurrent.length > maxSamples) {
+    dev.loopCurrent = dev.loopCurrent.slice(-maxSamples);
+  }
+  if (completed) drawLoop(dev);
+}
+
+function loopTick(value) {
+  return Math.abs(value) >= 100 ? String(Math.round(value)) : String(Math.round(value * 10) / 10);
+}
+
+function drawLoop(dev) {
+  if (!dev || !dev.big || !dev.loopCanvas || !dev.loopCanvas.isConnected) return;
+  const canvas = dev.loopCanvas;
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  if (!cssW || !cssH) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const cfg = LOOP_TYPES[selectedLoopType] || LOOP_TYPES.pv;
+  const margin = { left: 54, right: 14, top: 12, bottom: 34 };
+  const plotW = Math.max(1, cssW - margin.left - margin.right);
+  const plotH = Math.max(1, cssH - margin.top - margin.bottom);
+  const xOf = (value) => margin.left + (value - cfg.xMin) / (cfg.xMax - cfg.xMin) * plotW;
+  const yOfLoop = (value) => margin.top + (cfg.yMax - value) / (cfg.yMax - cfg.yMin) * plotH;
+  const labelColor = cssVar("--text-label") || "#8FA2BC";
+  const lineColor = cssVar("--c-wave") || "#2F80ED";
+
+  ctx.strokeStyle = GRID_COLOR;
+  ctx.fillStyle = labelColor;
+  ctx.lineWidth = 1;
+  ctx.font = '10px "Segoe UI", sans-serif';
+  ctx.textBaseline = "top";
+  for (let i = 0; i <= 4; i++) {
+    const x = margin.left + plotW * i / 4;
+    const y = margin.top + plotH * i / 4;
+    ctx.globalAlpha = (i === 0 || i === 4) ? 0.9 : 0.45;
+    ctx.beginPath(); ctx.moveTo(x, margin.top); ctx.lineTo(x, margin.top + plotH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + plotW, y); ctx.stroke();
+    ctx.globalAlpha = 1;
+    const xv = cfg.xMin + (cfg.xMax - cfg.xMin) * i / 4;
+    const yv = cfg.yMax - (cfg.yMax - cfg.yMin) * i / 4;
+    ctx.textAlign = "center";
+    ctx.fillText(loopTick(xv), x, margin.top + plotH + 5);
+    ctx.textAlign = "right";
+    ctx.fillText(loopTick(yv), margin.left - 7, y - 5);
+  }
+
+  // 零線比一般格線略亮，Flow 正負向與壓力零點更容易辨認。
+  ctx.globalAlpha = 0.8;
+  ctx.strokeStyle = GRID_COLOR;
+  if (cfg.xMin < 0 && cfg.xMax > 0) {
+    ctx.beginPath(); ctx.moveTo(xOf(0), margin.top); ctx.lineTo(xOf(0), margin.top + plotH); ctx.stroke();
+  }
+  if (cfg.yMin < 0 && cfg.yMax > 0) {
+    ctx.beginPath(); ctx.moveTo(margin.left, yOfLoop(0)); ctx.lineTo(margin.left + plotW, yOfLoop(0)); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = labelColor;
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.textAlign = "center";
+  ctx.fillText(cfg.xLabel, margin.left + plotW / 2, cssH - 14);
+  ctx.save();
+  ctx.translate(13, margin.top + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(cfg.yLabel, 0, 0);
+  ctx.restore();
+
+  const breaths = dev.loopBreaths.slice(-LOOP_BREATHS);
+  dev.loopEmpty.classList.toggle("hidden", breaths.length > 0);
+  const alphas = [0.22, 0.45, 1.0];
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(margin.left, margin.top, plotW, plotH);
+  ctx.clip();
+  breaths.forEach((breath, index) => {
+    if (!breath.length) return;
+    const alphaIndex = LOOP_BREATHS - breaths.length + index;
+    ctx.strokeStyle = lineColor;
+    ctx.globalAlpha = alphas[alphaIndex];
+    ctx.lineWidth = index === breaths.length - 1 ? 2.5 : 1.5;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (let i = 0; i < breath.length; i++) {
+      const x = xOf(breath[i][cfg.xKey]);
+      const y = yOfLoop(breath[i][cfg.yKey]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
 // ── 播放迴圈：緩衝偏離目標 → 播放速率 ±15% 微調，永不暫停 ────────
 let lastFrame = performance.now();
 function frame(now) {
@@ -467,7 +672,9 @@ function frame(now) {
     let n = Math.min(Math.floor(dev.acc), q.length);
     if (n > 0) {
       dev.acc -= n;
-      drawSamples(dev, q.splice(0, n));
+      const samples = q.splice(0, n);
+      recordLoopSamples(dev, samples);
+      drawSamples(dev, samples);
       if (!q.length) dev.acc = 0;      // 消耗到空 → 歸零避免下次爆衝
     }
     // 每 ~10 幀更新一次即時數值
@@ -579,6 +786,52 @@ function onParams(dev, m) {
   fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
 }
 
+function renderAlarmHistory(dev, events) {
+  const el = dev.alarmHistoryEl;
+  if (!el) return;
+  el.innerHTML = "";
+  if (!events.length) {
+    el.innerHTML = '<div class="panel-empty">尚無警報紀錄</div>';
+    return;
+  }
+  for (const event of events) {
+    const alarm = Object.assign({}, event, { prio: Number(event.prio || 0) });
+    const classified = RMAlarm.classify(alarm);
+    const row = document.createElement("div");
+    row.className = `alarm-history-row lvl-${classified.level}`;
+
+    const time = document.createElement("span");
+    time.className = "alarm-history-time";
+    time.textContent = event.time || "—";
+    const state = document.createElement("span");
+    state.className = `alarm-history-event ${event.event === "cleared" ? "cleared" : "appeared"}`;
+    state.textContent = event.event === "cleared" ? "解除" : "發生";
+    const name = document.createElement("span");
+    name.className = "alarm-history-name";
+    name.textContent = classified.name;
+    row.append(time, state, name);
+    el.appendChild(row);
+  }
+}
+
+async function loadAlarmHistory(dev) {
+  if (!dev.alarmHistoryEl) return;
+  const seq = ++dev.alarmHistorySeq;
+  dev.alarmHistoryEl.innerHTML = '<div class="panel-empty">讀取警報紀錄中…</div>';
+  try {
+    const response = await fetch(`/api/alarm-history/${encodeURIComponent(dev.id)}?limit=50`);
+    if (response.status === 401) { location.href = "/login"; return; }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (!dev.big || seq !== dev.alarmHistorySeq) return;
+    renderAlarmHistory(dev, Array.isArray(data.events) ? data.events : []);
+  } catch (e) {
+    if (dev.big && seq === dev.alarmHistorySeq) {
+      dev.alarmHistoryEl.innerHTML = '<div class="panel-empty error">警報紀錄讀取失敗</div>';
+    }
+  }
+}
+
 function onAlarm(dev, m) {
   // 全量更新：alarms 為目前所有警報（空陣列 = 解除）。
   // 依分級（RMAlarm，見 alarm_levels.js）由重到輕排序，同級再依 MEDIBUS 優先級高→低。
@@ -597,7 +850,10 @@ function onAlarm(dev, m) {
   // level 3（不影響生命）不觸發卡片警示外框，只在列表中以淡藍顯示
   dev.card.classList.remove("alarming-1", "alarming-2");
   dev.alarmLevel = 0;
-  if (!alarms.length) return;
+  if (!alarms.length) {
+    if (dev.big) loadAlarmHistory(dev);
+    return;
+  }
 
   // 放大檢視 header：完整清單（每則依自身分級上色）
   for (const a of alarms) {
@@ -623,6 +879,7 @@ function onAlarm(dev, m) {
     dev.card.classList.add(`alarming-${worst}`);
     dev.alarmLevel = worst;           // 有 level 1/2 才鳴響（level 3 只有視覺）
   }
+  if (dev.big) loadAlarmHistory(dev);
 }
 
 function fillTable(el, obj) {
@@ -648,7 +905,10 @@ function onDeviceInfo(dev, m) {
 function onDeviceRemoved(id) {
   const dev = devices.get(id);
   if (!dev) return;
-  if (dev.big) overlay.classList.add("hidden");
+  if (dev.big) {
+    overlay.classList.add("hidden");
+    document.body.classList.remove("detail-open");
+  }
   dev.card.remove();
   devices.delete(id);
   sortGrid();
@@ -716,8 +976,15 @@ window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     devices.forEach(setupCanvases);
+    devices.forEach(drawLoop);
     refitModeChips();
   }, 200);
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const expanded = [...devices.values()].find((dev) => dev.big);
+  if (expanded) collapse(expanded);
 });
 
 // ── 時鐘 ─────────────────────────────────────────────────────────
