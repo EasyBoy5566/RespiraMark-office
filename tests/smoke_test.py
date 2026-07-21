@@ -318,7 +318,7 @@ async def run_checks():
 
     # 注意：W-101/W-102 連線防護測試刻意放在本函式後段（見下方），
     # 因為它們合計要花數秒等待逾時，若放在這裡會延後下面的 snapshot/alarm
-    # 檢查時間點，而 fake_pi 的警報每 20 秒切換一次觸發/解除，delay 太多會
+    # 檢查時間點，而 smoke-02 的 fake_pi 警報會在隨機間隔切換，delay 太多會
     # 剛好跨過切換點導致誤判失敗（曾經因此觸發過一次假警報）。
 
     await asyncio.sleep(2.0)          # 讓 fake_pi 連上並開始送資料
@@ -377,7 +377,7 @@ async def run_checks():
 
     # ── ingest 連線防護（IMPROVEMENT_PLAN.md W-101/W-102）───────────
     # 放在這裡（而非測試前段）：這幾項合計要等數秒逾時，若放前段會延後
-    # snapshot/alarm 檢查的時間點，而 fake_pi 警報每 20 秒切換一次，
+    # snapshot/alarm 檢查的時間點，而 smoke-02 的警報會在隨機間隔切換，
     # 延誤太多會跨過切換點導致誤判。此時只剩 3 台 fake_pi 常駐連線，
     # 計算連線數上限時的基準數量穩定。
     check("連線數達上限，新連線被拒", await check_max_conns())
@@ -459,8 +459,8 @@ async def run_checks():
               str(sorted(devs3)))
 
     # ── 警報歷史（IMPROVEMENT_PLAN.md W-302）─────────────────────────
-    # smoke-02 用 --alarms 啟動：連線即觸發、之後每 20 秒切換觸發/解除；
-    # 這個檢查放在測試最後段，前面各項檢查累計耗時已足夠跨過第一次切換
+    # smoke-02 用 --alarms --alarm-immediate 啟動：連線即觸發，之後隨機切換；
+    # 這個檢查放在測試最後段，前面各項檢查累計耗時已足夠跨過第一次解除
     alarm_csv_path = os.path.join(ALARM_LOG_DIR, "alarm_smoke-02.csv")
     alarm_events = []
     if os.path.exists(alarm_csv_path):
@@ -567,12 +567,12 @@ def main():
     try:
         procs.append(start([PY, "main.py", "--config", cfg_path], log_file))
         time.sleep(1.5)
-        # smoke-02 帶 --alarms：驗證警報路徑（啟動即觸發一則）
+        # smoke-02 帶 --alarms --alarm-immediate：驗證警報路徑（啟動即觸發一則）
         # smoke-03：移除離線裝置測試用（run_checks 會先關掉它再移除）
         ca_path = os.path.join(CERT_DIR, "ca.pem")
         for dev, patient, rr, extra in (
                 ("smoke-01", "SMOKE001", "15", []),
-                ("smoke-02", "SMOKE002", "22", ["--alarms"]),
+                ("smoke-02", "SMOKE002", "22", ["--alarms", "--alarm-immediate"]),
                 ("smoke-03", "SMOKE003", "18", [])):
             procs.append(start(
                 [PY, os.path.join("tools", "fake_pi.py"),

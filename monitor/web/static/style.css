@@ -21,6 +21,9 @@
   --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 離線 header 底色 / 危險鈕 hover */
   --on-red:     #FFFFFF;                     /* 警報色頂端列上的文字（紅底） */
   --on-amber:   #0B1320;                     /* 警報色頂端列上的文字（深色主題亮黃底 → 深字） */
+  --band-red:   rgba(255, 23, 68, 0.80);     /* 疊在波形上的警報橫幅底色（夠不透明才讀得到字，仍略透出波形）*/
+  --band-amber: rgba(255, 179, 0, 0.80);
+  --band-blue:  rgba(47, 128, 237, 0.80);
   --overlay-bg: rgba(11, 19, 32, 0.96);     /* 放大檢視背景 */
   --sys-line:   #56A6FF;                     /* 系統狀態趨勢折線 */
   --blue:       #2F80ED;                     /* Primary Medical Blue（官方色盤） */
@@ -48,12 +51,45 @@
   --alarm-bg:   rgba(213, 0, 0, 0.08);
   --on-red:     #FFFFFF;
   --on-amber:   #FFFFFF;                     /* 淺色主題琥珀色較深（#B26E00）→ 白字 */
+  --band-red:   rgba(213, 0, 0, 0.92);       /* 波形上警報橫幅底色（淺色主題）*/
+  --band-amber: rgba(178, 110, 0, 0.94);
+  --band-blue:  rgba(28, 110, 213, 0.92);
   --overlay-bg: rgba(237, 241, 247, 0.96);
   --sys-line:   #0277BD;
   --blue:       #1C6ED5;                     /* 淺色底用 Active Blue，對比較足 */
   --blue-hover: #2F80ED;
   --focus:      #2F80ED;
 }
+
+/* 監視器模式（CMS 中央監視站風格）：近純黑底、磚格與底同色只用 1px 線分隔、方角貼齊。
+ * 這裡只覆寫背景/線色，文字/波形/警報色沿用深色主題（近純黑上一樣清楚）；
+ * 版面結構（貼齊/方角/格線）另在下方 [data-theme="mono"] 的結構規則。
+ * 為獨立主題，切回深/淺色即完全復原（見 app.js applyTheme）。*/
+[data-theme="mono"] {
+  --bg-primary:   #000000;
+  --bg-secondary: #000000;
+  --card-bg:      #000000;                    /* 磚格與背景同色 */
+  --hover:        #14181C;
+  --divider:      #2C313A;                    /* 卡片「內部」線條（header 底線、晶片框…）→ 較深、低調 */
+  --tile-line:    #e3e3e3;                    /* 儀器「大網格」分隔線（區隔不同病患）→ 偏白、明顯；要更白就加大 */
+  --tile-gap:     3px;                        /* 大網格線粗細：要更粗就加大這個值 */
+  --overlay-bg:   rgba(0, 0, 0, 0.96);
+}
+/* 監視器模式 版面結構：磚格完全貼齊、方角無圓、無浮起。大網格線由 grid 底色(--tile-line，偏白)
+ * 透過 gap 透出；卡片內部線條另用 --divider（較深）→ 兩者分離、可各自調色。
+ * 警報/離線框改用 outline（畫在磚格內，不佔版面、不破壞貼齊的格線）。*/
+[data-theme="mono"] main#grid { gap: var(--tile-gap); padding: 0; background: var(--tile-line); }
+[data-theme="mono"] .card { border: none; border-radius: 0; }
+[data-theme="mono"] .card:hover { background: var(--hover); }
+[data-theme="mono"] .card.alarming-1,
+[data-theme="mono"] .card.pi-offline { outline: 2px solid var(--red);   outline-offset: -2px; }
+[data-theme="mono"] .card.alarming-2 { outline: 2px solid var(--amber); outline-offset: -2px; }
+/* 設定值不用「框」：晶片去邊框/圓角/底色，值與值之間只留一條細直線（用較深的內部線色 --divider）*/
+[data-theme="mono"] .pchip {
+  background: transparent; border: none; border-radius: 0;
+  border-right: 1px solid var(--divider);
+}
+[data-theme="mono"] .pchip:last-child { border-right: none; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -77,6 +113,34 @@ header {
 #clock { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .conn.online  { color: var(--green); }
 .conn.offline { color: var(--red); }
+
+/* 儀表板頂端狀態列自動收起（只用於 index，管理頁 header 維持常駐）：
+ * 平時滑出畫面外，把垂直空間全讓給下方小卡；滑鼠碰到頂端感應條(#top-peek)或列本身、
+ * 或列內控制項取得焦點（欄數選單/選單展開）時才滑下。放大檢視 overlay(z=20) 蓋過它。*/
+header.auto-hide {
+  position: fixed; left: 0; right: 0; top: 0;
+  transform: translateY(-100%);
+  transition: transform 0.18s ease;
+  z-index: 15;
+}
+#top-peek {
+  position: fixed; left: 0; right: 0; top: 0;
+  height: 10px; z-index: 14;
+}
+/* 小提示把手：只在狀態列收起時可見（列滑下後會被 header 蓋住），讓使用者知道頂端可拉下 */
+#top-peek::after {
+  content: "";
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 46px; height: 4px;
+  background: var(--divider);
+  border-radius: 0 0 5px 5px;
+  opacity: 0.75;
+}
+#top-peek:hover + header.auto-hide,
+header.auto-hide:hover,
+header.auto-hide:focus-within {
+  transform: translateY(0);
+}
 
 /* 欄數選擇器（header 狀態區）：切換每列卡片數；密度依欄數自動分級（見 app.js applyCols）*/
 .cols-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
@@ -115,9 +179,9 @@ header {
 
 /* ── 卡片格線：欄數由使用者選（2–8 欄，見 app.js applyCols）；窄螢幕退回一欄 ──
  * 密度依欄數自動分級（data-density 由 app.js 設；警報/床號/波形一律保留）：
- *   full（2–3 欄） 完整卡：波形 58px、設定值列正常
- *   mid （4–5 欄） 波形縮矮、內距收緊、設定值列縮小並省去「設定值」小標
- *   compact（6–8 欄） 波形再縮、隱藏整個設定值區，只剩 標題列＋3 條迷你波形 */
+ *   full（2–3 欄） 完整卡：波形 58px、參數晶片正常（「設定值」小標一律不顯示）
+ *   mid （4–5 欄） 波形縮矮、內距收緊、參數晶片縮小
+ *   compact（6–8 欄） 波形再縮、隱藏整個參數晶片區，只剩 標題列＋3 條迷你波形 */
 main#grid {
   display: grid;
   grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
@@ -129,7 +193,6 @@ main#grid {
 /* mid（4–5 欄）*/
 main#grid[data-density="mid"] .wave-row canvas { height: 46px; }
 main#grid[data-density="mid"] .waves { padding: 3px 7px 1px; }
-main#grid[data-density="mid"] .strip-cap { display: none; }
 main#grid[data-density="mid"] .param-strip {
   grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
   gap: 3px; padding: 3px 7px 7px;
@@ -141,19 +204,17 @@ main#grid[data-density="mid"] .pchip .val { font-size: 13px; }
 main#grid[data-density="compact"] .wave-row { margin-bottom: 2px; }
 main#grid[data-density="compact"] .wave-row canvas { height: 38px; }
 main#grid[data-density="compact"] .waves { padding: 2px 6px 1px; }
-main#grid[data-density="compact"] .strip-cap,
 main#grid[data-density="compact"] .param-strip { display: none; }
 main#grid[data-density="compact"] .card-head { padding: 4px 8px; }
 main#grid[data-density="compact"] .dev-name { font-size: 13px; }
 main#grid[data-density="compact"] .patient { font-size: 11px; }
 main#grid[data-density="compact"] .head-alarms { font-size: 11px; }
-main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-size: 11px; }
+main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-size: 11px; }
 
-/* 窄螢幕/手機：退回單欄，且不論選幾欄都以完整卡呈現（波形回原高、設定值顯示）*/
+/* 窄螢幕/手機：退回單欄，且不論選幾欄都以完整卡呈現（波形回原高、參數晶片完整）*/
 @media (max-width: 800px) {
   main#grid { grid-template-columns: 1fr; }
   main#grid[data-density] .wave-row canvas { height: 58px; }
-  main#grid[data-density] .strip-cap { display: block; }
   main#grid[data-density] .param-strip {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
@@ -171,7 +232,7 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 /* ── 裝置卡片 ────────────────────────────────────────────── */
 .card {
   background: var(--card-bg);
-  border: 1px solid var(--divider);
+  border: 2px solid var(--divider);   /* 一律 2px：警報/離線只換色不改寬 → 尺寸永遠不變、不會把鄰卡推移 */
   border-radius: 10px;
   overflow: hidden;
   cursor: pointer;
@@ -179,7 +240,7 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 .card:hover { border-color: var(--hover); }
 /* 離線醒目樣式（IMPROVEMENT_PLAN.md W-304）：紅框＋紅底 header 一眼可辨，
  * 波形區維持原始亮度所在仍讀得到最後數值，只把整張卡稍微壓暗以示「非即時」 */
-.card.pi-offline { border-color: var(--red); border-width: 2px; filter: brightness(0.85); }
+.card.pi-offline { border-color: var(--red); filter: brightness(0.85); }
 .card.pi-offline .card-head { border-left: 4px solid var(--red); background: var(--alarm-bg); }
 
 .card-head {
@@ -215,11 +276,14 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 /* ── 警報（狀態列中央置中；資料由 alarm 訊息驅動，分級見 alarm_levels.js）───
  * 嚴重度以整張卡的警示外框 + 頂端列底色呈現（.card.alarming-*，故意沒有 -3 版本）；
  * level 3（不影響生命）不觸發外框/底色，只在列表中以中性色顯示 */
+/* 完整警報清單只在放大檢視的 header 顯示；小卡改用疊在 Paw 波形上的橫幅（.wave-alarm）*/
 .head-alarms {
-  display: inline-flex; flex-wrap: wrap; gap: 2px 12px;
+  display: none;
+  flex-wrap: wrap; gap: 2px 12px;
   justify-content: center;
   font-size: 13px;
 }
+.card.big .head-alarms { display: inline-flex; }
 
 .alarm-item { font-weight: bold; white-space: nowrap; }
 .alarm-item.lvl-1 { color: var(--red); }
@@ -231,7 +295,7 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
  * 只固定寬度高度仍會跳動，因此尺寸與字形 metrics 完全脫鉤 */
 .mute-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 76px; height: 22px;
+  width: 32px; height: 22px;
   background: var(--card-bg);
   border: 1px solid var(--divider);
   border-radius: 5px;
@@ -247,8 +311,9 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 
 /* 警示外框 + 頂端列同色（離線時 Pi 資料已不可信，維持離線樣式優先，故 :not）；
  * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber）確保可讀 */
-.card.alarming-1 { border-color: var(--red); border-width: 2px; }
-.card.alarming-2 { border-color: var(--amber); border-width: 2px; }
+/* 邊框寬度固定（見 .card 一律 2px），警報只換色 → 尺寸不變、不會把鄰卡推移 */
+.card.alarming-1 { border-color: var(--red); }
+.card.alarming-2 { border-color: var(--amber); }
 .card.alarming-1:not(.pi-offline) .card-head { background: var(--red); }
 .card.alarming-2:not(.pi-offline) .card-head { background: var(--amber); }
 .card.alarming-1:not(.pi-offline) .card-head .dev-name,
@@ -258,8 +323,29 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 .card.alarming-2:not(.pi-offline) .card-head .patient,
 .card.alarming-2:not(.pi-offline) .card-head .alarm-item { color: var(--on-amber); }
 
+/* ── 小卡警報（疊在波形區上方，從 Paw 頂端往下堆疊；放大檢視改用 header 完整清單）───
+ * 每則警報一條半透明色帶（依自身分級上色），多則往下排、會蓋到下方 Flow/Vol 波形；
+ * pointer-events:none 讓點擊穿透波形 → 仍可點卡片放大 */
+.wave-alarm {
+  position: absolute; top: 3px; left: 10px; right: 10px;
+  display: flex; flex-direction: column; gap: 2px;
+  pointer-events: none; z-index: 3;
+}
+.wave-alarm .band-row {
+  padding: 1px 8px; border-radius: 3px;
+  font-size: 12px; font-weight: bold; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.wave-alarm .band-row.lvl-1 { background: var(--band-red);   color: var(--on-red); }
+.wave-alarm .band-row.lvl-2 { background: var(--band-amber); color: var(--on-amber); }
+.wave-alarm .band-row.lvl-3 { background: var(--band-blue);  color: #FFFFFF; }
+.card.big .wave-alarm { display: none !important; }   /* 放大時改看 header 完整清單 */
+main#grid[data-density="compact"] .wave-alarm { left: 6px; right: 6px; }
+main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; padding: 1px 5px; }
+
 /* ── 波形區 ─────────────────────────────────────────────── */
-.waves { padding: 4px 8px 2px; }
+.waves { position: relative; padding: 4px 8px 2px; }
 .wave-row { position: relative; margin-bottom: 3px; }
 .wave-row canvas {
   display: block; width: 100%; height: 58px;
@@ -273,6 +359,9 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
   font-size: 11px; font-weight: bold; pointer-events: none;
   color: var(--c-wave);
 }
+/* 波形標籤：小卡總覽只顯示名稱（Paw/Flow/Vol）；單位只在放大檢視顯示 */
+.wl-unit { display: none; }
+.card.big .wl-unit { display: inline; }
 .wave-val {
   position: absolute; top: 2px; right: 8px;
   font-size: 13px; font-weight: bold;
@@ -282,7 +371,9 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 }
 
 /* ── 參數列（卡片模式：顯示呼吸器設定值）────────────────── */
+/* 「設定值」小標：格線總覽一律不顯示（含 2–3 欄，只留參數晶片）；窄螢幕大卡才顯示（見下方 media query）*/
 .strip-cap {
+  display: none;
   font-size: 11px; color: var(--text-label);
   padding: 2px 10px 0;
 }
@@ -302,6 +393,14 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 .pchip .k { font-size: 11px; color: var(--text-label); }
 .pchip .val { font-size: 15px; font-weight: bold; font-variant-numeric: tabular-nums; }
 .pchip .u { font-size: 10px; color: var(--text-disabled); }
+
+/* 「Mode」是文字型設定值（比數字長）：盒子大小與其他晶片一致；字級由 app.js 依內容量寬度
+ * 自動縮放（fitText），短模式維持與其他值相同大小、長模式才縮小以完整單行顯示；
+ * 完整模式（含 /AF 等特性）仍可在放大檢視的「模式」欄看到 */
+.pchip.mode .val {
+  letter-spacing: -0.2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ── 放大檢視（overlay）─────────────────────────────────── */
 .overlay {
@@ -448,6 +547,7 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
   text-decoration: none;
 }
 .user-menu-item:hover { background: var(--hover); color: var(--text-primary); }
+.user-menu-item.active { color: var(--blue); font-weight: bold; }   /* 監視器模式啟用中 */
 
 /* ── 管理頁（/admin）────────────────────────────────────── */
 .admin-main {
@@ -463,38 +563,53 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 .admin-empty { color: var(--text-disabled); font-size: 15px; padding: 14px 0; }
 .admin-hint { color: var(--text-label); font-size: 13px; margin-top: 8px; line-height: 1.6; }
 
-/* 設備健康總表：卡片格線，視覺語言比照主儀表板的 .card（同背景/邊框/圓角）── */
+/* 設備健康總表：桌面版每台設備是一列橫向長條，減少正方形卡片造成的版面浪費。 */
 .admin-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
 }
 .admin-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.35fr) minmax(330px, 1.1fr);
+  grid-template-areas:
+    "head metrics info"
+    "head metrics foot"
+    "trend trend trend";
   background: var(--card-bg);
   border: 1px solid var(--divider);
   border-radius: 10px;
   overflow: hidden;
 }
 .admin-card-head {
+  grid-area: head;
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--divider);
+  border-right: 1px solid var(--divider);
 }
-.admin-card-head .dev-name { font-weight: bold; font-size: 15px; }
+.admin-card-head .dev-name {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: bold; font-size: 15px;
+}
 .admin-card-head .spacer { flex: 1; }
+.admin-card-head .status-group { flex: 0 0 auto; padding-inline: 6px; gap: 4px; }
 
 .metric-grid {
+  grid-area: metrics;
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-  padding: 10px 12px;
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  border-right: 1px solid var(--divider);
 }
 .metric-chip {
   background: var(--bg-secondary);
   border: 1px solid var(--divider);
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 5px 6px;
   text-align: center;
 }
 .metric-label { font-size: 11px; color: var(--text-label); }
@@ -507,19 +622,26 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 .metric-val.crit { color: var(--red); }
 
 .admin-card-info {
-  display: flex; flex-wrap: wrap; gap: 4px 12px;
-  padding: 0 12px 10px;
+  grid-area: info;
+  display: flex; flex-wrap: nowrap; gap: 8px;
+  align-items: center;
+  padding: 6px 12px 2px;
+  min-width: 0; overflow-x: auto;
+  white-space: nowrap;
   font-size: 12px; color: var(--text-secondary);
 }
+.admin-card-info .info-chip { flex: 0 0 auto; }
 .info-chip.crit { color: var(--red); font-weight: bold; }
 
 .admin-card-foot {
+  grid-area: foot;
   display: flex; gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--divider);
+  align-items: center; justify-content: flex-end;
+  padding: 2px 12px 7px;
 }
 
 .admin-trend {
+  grid-area: trend;
   padding: 4px 12px 12px;
   border-top: 1px dashed var(--divider);
 }
@@ -539,6 +661,32 @@ main#grid[data-density="compact"] .mute-btn { width: 60px; height: 20px; font-si
 .admin-btn:disabled {
   color: var(--text-disabled); border-color: var(--divider);
   background: var(--bg-secondary); cursor: not-allowed;
+}
+
+/* 中型視窗保留橫向感：名稱/狀態與四項指標並排，資訊及操作列放在下一行。 */
+@media (max-width: 1050px) {
+  .admin-card {
+    grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr);
+    grid-template-areas:
+      "head metrics"
+      "info foot"
+      "trend trend";
+  }
+  .metric-grid { border-right: none; }
+  .admin-card-info { border-top: 1px solid var(--divider); }
+}
+
+/* 窄螢幕無法容納橫條內容時改為直向，避免指標或操作按鈕被擠出畫面。 */
+@media (max-width: 700px) {
+  .admin-main { padding-inline: 10px; }
+  .admin-card {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "metrics" "info" "foot" "trend";
+  }
+  .admin-card-head { border-right: none; border-bottom: 1px solid var(--divider); }
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-card-info { border-top: none; padding-top: 2px; }
+  .admin-card-foot { justify-content: flex-start; flex-wrap: wrap; }
 }
 
 /* 帳號清單：卡片包住表格，與上方風格一致 */

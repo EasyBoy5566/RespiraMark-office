@@ -4,19 +4,20 @@
  *   緩衝偏離目標時以 ±15% 微調播放速率，永不暫停 → 波形連續
  * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）；
  *   放大/縮回/換主題時從歷史重播並接續原掃描位置（不從左端重畫）
- * - 小卡片：三條波形（統一單色）+ 設定值；警報直接顯示在狀態列右側；點開顯示所有量測值
+ * - 小卡片：三條波形（統一單色）+ 設定值；警報以半透明橫幅疊在最上方(Paw)波形上（最嚴重一則＋其餘計數）；點開顯示完整警報清單與所有量測值
  * - 連線狀態（呼吸器/伺服器）移到管理頁 /admin 顯示；本頁 Pi 離線以紅框呈現
  * - 警報音：呼吸器發出 level 1/2 警報時鳴響（Web Audio 合成）；右上角靜音鈕按一次靜音 2 分鐘
- * - 深/淺色主題：顏色一律讀 style.css 的 CSS 變數，切換時從歷史重播波形
+ * - 主題：深色 / 淺色 / 監視器(mono，近純黑 CMS 風格)三選一；顏色一律讀 style.css 的 CSS 變數，切換時從歷史重播波形
  * - 登入顯示在 auth.js；Pi 機器健康狀態只在管理頁（/admin）顯示，本頁忽略 sys
  */
 "use strict";
 
 // ── 常數（沿用 Pi 端 WaveformConfig；繪圖顏色由 refreshThemeColors 填入）──
+// name = 波形名稱（小卡總覽只顯示這個）；unit = 單位（只在放大檢視顯示，見 style.css .wl-unit）
 const CHANNELS = [
-  { key: "p", label: "Paw cmH₂O", colorVar: "--c-wave", color: "", min: -5,  max: 45,   zero: 0 },
-  { key: "f", label: "Flow L/min", colorVar: "--c-wave", color: "", min: -50, max: 50,   zero: 0 },
-  { key: "v", label: "Vol mL",     colorVar: "--c-wave", color: "", min: 0,   max: 1000, zero: 0 },
+  { key: "p", name: "Paw",  unit: "cmH₂O", colorVar: "--c-wave", color: "", min: -5,  max: 45,   zero: 0 },
+  { key: "f", name: "Flow", unit: "L/min", colorVar: "--c-wave", color: "", min: -50, max: 50,   zero: 0 },
+  { key: "v", name: "Vol",  unit: "mL",    colorVar: "--c-wave", color: "", min: 0,   max: 1000, zero: 0 },
 ];
 
 const WINDOW_SEC = 20;      // 波形視窗寬度（秒）
@@ -35,8 +36,11 @@ const connEl = document.getElementById("conn");
 
 const devices = new Map();   // device_id -> Dev
 
-// ── 主題（深色預設 / 淺色；選擇存 localStorage）──────────────────
+// ── 主題（深色預設 / 淺色 / 監視器；選擇存 localStorage）──────────────
+// 「監視器模式」(mono) 是獨立主題：近純黑底、磚格貼齊只用 1px 線分隔（樣式見 style.css
+// [data-theme="mono"]）。切回深/淺色即完全復原。明暗鈕在 dark↔light 間切換，並會退出 mono。
 const themeBtn = document.getElementById("themeToggle");
+const monoBtn = document.getElementById("monoToggle");
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -52,12 +56,18 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem("rm-theme", theme); } catch (e) { /* 私密瀏覽等，忽略 */ }
   themeBtn.textContent = theme === "light" ? "🌙 深色" : "☀ 淺色";
+  monoBtn.classList.toggle("active", theme === "mono");   // 監視器模式啟用中 → 選單項目highlight
   refreshThemeColors();
   devices.forEach(setupCanvases);   // 用新顏色從歷史重播波形
+  refitModeChips();                 // 版面（磚格寬）可能改變 → Mode 文字重新量寬縮字
 }
 
+// 明暗鈕：dark↔light 間切換（在 mono 時點它會退出到 light）
 themeBtn.addEventListener("click", () =>
   applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
+// 監視器鈕：切到 mono；已在 mono 時再按一次退回 dark
+monoBtn.addEventListener("click", () =>
+  applyTheme(document.documentElement.dataset.theme === "mono" ? "dark" : "mono"));
 
 let initTheme = "dark";
 try { initTheme = localStorage.getItem("rm-theme") || "dark"; } catch (e) { /* 同上 */ }
@@ -82,6 +92,7 @@ function applyCols(n) {
   colsSelect.value = String(n);
   try { localStorage.setItem("rm-cols", n); } catch (e) { /* 私密瀏覽等，忽略 */ }
   devices.forEach(setupCanvases);   // 欄寬/波形高度改變 → 依新尺寸從歷史重畫
+  refitModeChips();                 // 欄寬改變 → Mode 文字重新量寬縮字
 }
 
 colsSelect.addEventListener("change", () => applyCols(parseInt(colsSelect.value, 10)));
@@ -127,10 +138,10 @@ function updateMuteBtn(dev) {
   const left = dev.muteUntil - Date.now();
   if (left > 0) {
     const s = Math.ceil(left / 1000);
-    dev.muteBtn.textContent = `🔕 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    dev.muteBtn.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
     dev.muteBtn.classList.add("muted");
   } else {
-    dev.muteBtn.textContent = "🔔 靜音";
+    dev.muteBtn.textContent = "🔔";
     dev.muteBtn.classList.remove("muted");
   }
 }
@@ -197,7 +208,7 @@ function buildCard(dev) {
       <span class="head-alarms"></span>
       <span class="spacer"></span>
       <button class="mute-btn" type="button"
-              title="靜音這台裝置的警報音 2 分鐘（再按一次取消）">🔔 靜音</button>
+              title="靜音警報2分鐘">🔔</button>
       <button class="close-btn hidden">✕ 關閉</button>
     </div>
     <div class="waves"></div>
@@ -223,13 +234,17 @@ function buildCard(dev) {
     const row = document.createElement("div");
     row.className = "wave-row";
     row.innerHTML = `<canvas></canvas>
-      <span class="wave-label ${ch.key}">${ch.label}</span>
+      <span class="wave-label ${ch.key}"><span class="wl-name">${ch.name}</span><span class="wl-unit"> ${ch.unit}</span></span>
       <span class="wave-val ${ch.key}">--</span>`;
     waves.appendChild(row);
     dev.chans.push({ canvas: row.querySelector("canvas"),
                      valEl: row.querySelector(".wave-val"),
                      ctx: null, w: 0, h: 0, prevY: null, hist: [] });
   }
+  // 小卡警報：疊在波形區上方，從 Paw 頂端往下堆疊（多則會蓋到 Flow/Vol）；放大檢視改用 header 完整清單
+  const alarmBand = document.createElement("div");
+  alarmBand.className = "wave-alarm hidden";
+  waves.appendChild(alarmBand);
 
   card.addEventListener("click", () => { if (!dev.big) expand(dev); });
   card.querySelector(".close-btn").addEventListener("click", (e) => {
@@ -244,7 +259,9 @@ function buildCard(dev) {
 
 function sortGrid() {
   [...grid.children]
-    .sort((a, b) => a.dataset.device.localeCompare(b.dataset.device))
+    // 數字感知排序：device-1、device-2、device-10，而不是 device-1、device-10、device-2。
+    .sort((a, b) => a.dataset.device.localeCompare(
+      b.dataset.device, undefined, { numeric: true, sensitivity: "base" }))
     .forEach((el) => grid.appendChild(el));
 }
 
@@ -464,32 +481,65 @@ function setPatient(dev, patient) {
   dev.card.querySelector(".patient").textContent = patient ? `病歷號: ${patient}` : "";
 }
 
+// 文字型設定值（Mode）自動縮字：從該密度的標準字級起，量寬度逐步縮到剛好單行放得下，
+// 讓 VC-SIMV 這類較長的模式完整顯示（短模式仍維持與其他數值相同大小）。
+function modeMaxPx() { return grid.dataset.density === "mid" ? 13 : 15; }
+
+function fitText(el, maxPx, minPx = 8) {
+  el.style.fontSize = maxPx + "px";
+  if (!el.clientWidth) {
+    // 量到 0 寬（一次建很多床時版面尚未成形，或 compact 密度暫時隱藏）：
+    // 不能留著大字（會被 … 截斷），排下一個 frame 等版面成形後再量一次。
+    // 防呆：僅在「已接上 DOM 且已有寬度」時才重試 → compact 隱藏時不會無限迴圈。
+    requestAnimationFrame(() => {
+      if (el.isConnected && el.clientWidth) fitText(el, maxPx, minPx);
+    });
+    return;
+  }
+  let size = maxPx;
+  while (size > minPx && el.scrollWidth > el.clientWidth) {
+    size -= 0.5;
+    el.style.fontSize = size + "px";
+  }
+}
+
+function refitModeChips() {
+  const max = modeMaxPx();
+  document.querySelectorAll(".pchip.mode .val").forEach((el) => fitText(el, max));
+}
+
 function onParams(dev, m) {
-  const mode = (m.mode || "") + (m.features || []).join("");
-  dev.card.querySelector(".mode-line").textContent = mode || "—";
+  // 主模式（VC-SIMV…）與特性旗標（/AF…）分開：放大檢視「模式」顯示完整（含特性），
+  // 小卡設定值列只放主模式，避免欄數多時字太長折到第二行
+  const modeBase = m.mode || "";
+  const modeFull = modeBase + (m.features || []).join("");
+  dev.card.querySelector(".mode-line").textContent = modeFull || "—";
 
   // 通氣模式本質上也是一種設定值（跟 PEEP、RR 一樣是醫護會查看的呼吸器設定），
-  // 放在設定值清單最前面
-  const settings = mode ? { Mode: mode, ...(m.settings || {}) } : { ...(m.settings || {}) };
+  // 放在設定值清單最前面（小卡只放主模式，完整模式在放大檢視看得到）
+  const settings = modeBase ? { Mode: modeBase, ...(m.settings || {}) } : { ...(m.settings || {}) };
 
   // VC（容積控制）類模式的 VTi 以 mL 呈現：MEDIBUS 給的是公升（如 0.450），
   // 臨床慣用 450 mL。已是 mL 量級（≥10）的值不動，避免重複換算。
-  if (/\bVC/.test(mode) && settings.VTi !== undefined) {
+  if (/\bVC/.test(modeBase) && settings.VTi !== undefined) {
     const litres = parseFloat(settings.VTi);
     if (!isNaN(litres) && litres < 10) settings.VTi = `${Math.round(litres * 1000)}`;
   }
 
-  // 小卡片參數列 = 設定值（動態依收到的項目建立）
+  // 小卡片參數列 = 設定值（動態依收到的項目建立）；Mode 是文字型、字較長 → 特別標記讓 CSS 給它兩欄寬且單行
   const strip = dev.card.querySelector(".param-strip");
   strip.innerHTML = "";
   for (const [k, v] of Object.entries(settings)) {
     const chip = document.createElement("div");
-    chip.className = "pchip";
+    chip.className = k === "Mode" ? "pchip mode" : "pchip";
     chip.innerHTML = `<div class="k"></div><div class="val"></div>`;
     chip.querySelector(".k").textContent = k;
     chip.querySelector(".val").textContent = v;
     strip.appendChild(chip);
   }
+  // 全部晶片就位後再量寬度縮字（此時 auto-fit 欄寬已定），讓 Mode 文字依內容完整單行顯示
+  const modeVal = strip.querySelector(".pchip.mode .val");
+  if (modeVal) fitText(modeVal, modeMaxPx());
   // 放大檢視：所有量測值（設定值不重複列表——小卡參數列在放大時仍看得到）
   fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
 }
@@ -497,25 +547,43 @@ function onParams(dev, m) {
 function onAlarm(dev, m) {
   // 全量更新：alarms 為目前所有警報（空陣列 = 解除）。
   // 依分級（RMAlarm，見 alarm_levels.js）由重到輕排序，同級再依 MEDIBUS 優先級高→低。
-  // 顯示在狀態列右側；嚴重度以整張卡的警示外框呈現（.card.alarming-*）。
+  // 兩處呈現：放大檢視在 header 顯示完整清單（各自分級上色）；小卡以半透明橫幅疊在
+  // Paw 波形上，只放最嚴重一則＋其餘計數（避免擠在 header 折行）。
+  // 嚴重度另以整張卡的警示外框＋header 底色呈現（.card.alarming-*）。
   const alarms = (m.alarms || [])
     .map((a) => Object.assign({}, a, RMAlarm.classify(a)))
     .sort((a, b) => (a.level - b.level) || ((b.prio || 0) - (a.prio || 0)));
 
-  const box = dev.card.querySelector(".head-alarms");
+  const box = dev.card.querySelector(".head-alarms");     // 放大檢視：完整清單
+  const band = dev.card.querySelector(".wave-alarm");      // 小卡：疊在 Paw 上的橫幅
   box.innerHTML = "";
+  band.innerHTML = "";
+  band.className = "wave-alarm hidden";
   // level 3（不影響生命）不觸發卡片警示外框，只在列表中以淡藍顯示
   dev.card.classList.remove("alarming-1", "alarming-2");
   dev.alarmLevel = 0;
   if (!alarms.length) return;
 
+  // 放大檢視 header：完整清單（每則依自身分級上色）
   for (const a of alarms) {
     const item = document.createElement("span");
     item.className = `alarm-item lvl-${a.level}`;
     item.textContent = `${a.level === 3 ? "•" : "⚠"} ${a.name}`;
     box.appendChild(item);
   }
+
   const worst = alarms[0].level;      // 已依分級排序，第一筆就是目前最嚴重的等級
+
+  // 小卡橫幅：每則警報各自一條色帶（依自身分級上色），從 Paw 頂端往下堆疊
+  // （多則會往下排、蓋到 Flow/Vol 波形）；完整判讀仍可點開卡片
+  band.className = "wave-alarm";
+  for (const a of alarms) {
+    const row = document.createElement("div");
+    row.className = `band-row lvl-${a.level}`;
+    row.textContent = `${a.level === 3 ? "•" : "⚠"} ${a.name}`;
+    band.appendChild(row);
+  }
+
   if (worst <= 2) {
     dev.card.classList.add(`alarming-${worst}`);
     dev.alarmLevel = worst;           // 有 level 1/2 才鳴響（level 3 只有視覺）
@@ -569,6 +637,8 @@ function dispatch(m) {
         if (d[k]) MSG_HANDLERS[k](dev, d[k]);
       }
     }
+    // 一次建很多床後，等版面成形再統一量寬縮字，確保 Mode 文字不被 … 截斷
+    requestAnimationFrame(refitModeChips);
     return;
   }
   if (m.type === "device_removed") { onDeviceRemoved(m.device); return; }
@@ -610,6 +680,7 @@ window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     devices.forEach(setupCanvases);
+    refitModeChips();
   }, 200);
 });
 

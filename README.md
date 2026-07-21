@@ -24,7 +24,7 @@ python main.py              # Windows 也可直接雙擊 start_server.bat
 ```bash
 python tools/fake_pi.py --device pi-01 --patient TEST001
 python tools/fake_pi.py --device pi-02 --patient TEST002 --rr 22
-python tools/fake_pi.py --device pi-03 --patient TEST003 --alarms   # 含模擬警報
+python tools/fake_pi.py --device pi-03 --patient TEST003 --alarms   # 隨機觸發/解除模擬警報
 ```
 
 儀表板即時出現對應床位卡片：三條波形 + 通氣模式 + 設定值（有警報時卡片頂端顯示紅色警報列）。**點擊卡片放大**可看所有量測值。

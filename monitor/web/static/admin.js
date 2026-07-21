@@ -107,7 +107,9 @@ function buildCard(dev) {
 
 function sortGrid() {
   [...devGrid.children]
-    .sort((a, b) => a.dataset.device.localeCompare(b.dataset.device))
+    // numeric 讓 device-2 排在 device-10 前面，而不是一般字串順序的 1、10、2。
+    .sort((a, b) => a.dataset.device.localeCompare(
+      b.dataset.device, undefined, { numeric: true, sensitivity: "base" }))
     .forEach((el) => devGrid.appendChild(el));
 }
 

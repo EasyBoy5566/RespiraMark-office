@@ -7,7 +7,9 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header>
+  <!-- 頂端感應條：滑鼠碰到最上方才把狀態列滑出（平時收起，把空間讓給下方小卡）-->
+  <div id="top-peek"></div>
+  <header class="auto-hide">
     <div class="brand">VentMonitor</div>
     <div class="header-right">
       <label class="cols-picker">
@@ -29,6 +31,7 @@
         <div id="userMenu" class="user-menu hidden">
           <a id="adminLink" class="user-menu-item hidden" href="/admin">⚙ 設備管理</a>
           <button id="themeToggle" class="user-menu-item" type="button">☀ 淺色</button>
+          <button id="monoToggle" class="user-menu-item" type="button">🖥 監視器模式</button>
           <button id="logoutBtn" class="user-menu-item hidden" type="button">登出</button>
         </div>
       </div>

@@ -28,6 +28,12 @@ FLUSH_INTERVAL = 0.15    # 秒，打包間隔（與 telemetry_client 相同）
 PARAMS_INTERVAL = 5.0    # 秒，慢數據間隔
 SYS_INTERVAL = 5.0       # 秒，系統狀態間隔（與 telemetry_client 相同）
 
+ALARM_POOL = (
+    {"prio": 28, "code": "10", "cp": 1, "text": "PAW HIGH"},
+    {"prio": 3, "code": "9C", "cp": 2, "text": "LEAKAGE"},
+    {"prio": 12, "code": "93", "cp": 2, "text": "APNEA VENT"},
+)
+
 
 class FakeSys:
     """模擬 Pi 系統狀態隨機漫步（CPU/溫度緩慢變動）；--sys-hot 模擬過熱高載"""
@@ -91,10 +97,10 @@ class BreathModel:
         return {
             "type": "params",
             "mode": "VC-SIMV",
-            "features": ["/AF"],
+            "features": [],          # 特性旗標（如 /AF AutoFlow）；本模擬器暫不送，避免模式字串過長
             "settings": {
                 "FiO2": "40", "VTi": "0.450", "RR": f"{self.rr:.0f}",
-                "PEEP": f"{self.peep:.0f}", "Ti": "1.3", "Pmax": "35",
+                "PEEP": f"{self.peep:.0f}", "Ti": "1.3",
             },
             "measured": {
                 "VT": f"{self.cur_vt:.0f}", "RR": f"{self.rr + random.uniform(-0.6, 0.6):.1f}",
@@ -119,6 +125,17 @@ def send_lines(sock, msgs):
         for m in msgs
     )
     sock.sendall(payload.encode("utf-8"))
+
+
+def random_alarms():
+    """隨機挑選至少一種作用中的警報，避免每次都顯示相同組合。"""
+    count = random.randint(1, len(ALARM_POOL))
+    return [dict(alarm) for alarm in random.sample(ALARM_POOL, count)]
+
+
+def random_alarm_interval(args):
+    """下一次警報狀態變化前的隨機秒數。"""
+    return random.uniform(args.alarm_interval_min, args.alarm_interval_max)
 
 
 def run_session(args, model, sysmodel):
@@ -148,7 +165,11 @@ def run_session(args, model, sysmodel):
     next_flush = next_sample + FLUSH_INTERVAL
     next_params = next_sample + PARAMS_INTERVAL
     next_sys = next_sample + SYS_INTERVAL
-    next_alarm = next_sample if args.alarms else None   # 啟用時立刻發第一則
+    next_alarm = None
+    if args.alarms:
+        # 預設讓每台裝置錯開發生；smoke test 可用 --alarm-immediate 保留立即觸發。
+        first_delay = 0.0 if args.alarm_immediate else random_alarm_interval(args)
+        next_alarm = next_sample + first_delay
     alarm_on = False
     dt = 1.0 / SAMPLE_RATE
 
@@ -174,18 +195,12 @@ def run_session(args, model, sysmodel):
             send_lines(sock, [sysmodel.sample()])
             next_sys = now + SYS_INTERVAL
         if next_alarm is not None and now >= next_alarm:
-            alarm_on = not alarm_on                # 每 20 秒切換 觸發/解除
-            alarms = []
-            if alarm_on:
-                # 三個等級都覆蓋（對照 alarm_levels.js 已確認的真實對照表），方便開發時看三色
-                alarms.append({"prio": 28, "code": "10", "cp": 1, "text": "PAW HIGH"})
-                alarms.append({"prio": 3, "code": "9C", "cp": 2, "text": "LEAKAGE"})
-                if random.random() < 0.5:
-                    alarms.append({"prio": 12, "code": "93", "cp": 2, "text": "APNEA VENT"})
+            alarm_on = not alarm_on
+            alarms = random_alarms() if alarm_on else []
             send_lines(sock, [{"type": "alarm", "alarms": alarms}])
             print(f"[{args.device}] 警報 {'觸發' if alarm_on else '解除'}: "
                   f"{[a['text'] for a in alarms] or '—'}")
-            next_alarm = now + 20.0
+            next_alarm = now + random_alarm_interval(args)
         time.sleep(0.01)
 
 
@@ -239,12 +254,24 @@ def main():
     ap.add_argument("--token", default="",
                     help="hello 的存取權杖（伺服器 config.json 有設 ingest_token 時必填）")
     ap.add_argument("--alarms", action="store_true",
-                    help="模擬警報：啟動即觸發，之後每 20 秒切換觸發/解除（開發警報 UI 用）")
+                    help="模擬警報：隨機時間觸發/解除，警報種類也會隨機（開發警報 UI 用）")
+    ap.add_argument("--alarm-interval-min", type=float, default=5.0,
+                    help="警報觸發或解除前的最短秒數（預設 5）")
+    ap.add_argument("--alarm-interval-max", type=float, default=20.0,
+                    help="警報觸發或解除前的最長秒數（預設 20）")
+    ap.add_argument("--alarm-immediate", action="store_true",
+                    help="第一則警報立即觸發；後續仍使用隨機間隔（自動測試用）")
     ap.add_argument("--sys-hot", action="store_true",
                     help="模擬 Pi 過熱高載：溫度/CPU 偏高且降頻旗標非 0（測系統狀態示警配色用）")
     ap.add_argument("--tls-ca", default="",
                     help="TLS 連線：伺服器自建 CA 憑證（ca.pem）路徑；省略 = 明文")
     args = ap.parse_args()
+
+    if (not math.isfinite(args.alarm_interval_min)
+            or not math.isfinite(args.alarm_interval_max)
+            or args.alarm_interval_min <= 0
+            or args.alarm_interval_max < args.alarm_interval_min):
+        ap.error("警報間隔必須大於 0，且 --alarm-interval-max 不得小於 --alarm-interval-min")
 
     # 單台：直接在主執行緒跑，Ctrl+C 立即結束（行為與原本相同）
     if args.number <= 1:
