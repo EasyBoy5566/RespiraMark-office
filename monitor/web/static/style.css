@@ -316,18 +316,20 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .mute-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 22px;
-  background: var(--card-bg);
-  border: 1px solid var(--divider);
-  border-radius: 5px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 12px; font-weight: bold;
   padding: 0;
   cursor: pointer;
   white-space: nowrap;
+  opacity: 0.82;
   font-variant-numeric: tabular-nums;   /* 倒數數字不跳動 */
 }
-.mute-btn:hover { border-color: var(--hover); }
-.mute-btn.muted { color: var(--text-label); border-style: dashed; }
+.mute-btn:hover { color: var(--text-primary); opacity: 1; }
+.mute-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.mute-btn.muted { color: var(--text-label); }
 
 /* 警示外框 + 頂端列同色（離線時 Pi 資料已不可信，維持離線樣式優先，故 :not）；
  * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber）確保可讀 */
@@ -338,10 +340,12 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .card.alarming-2:not(.pi-offline) .card-head { background: var(--amber); }
 .card.alarming-1:not(.pi-offline) .card-head .dev-name,
 .card.alarming-1:not(.pi-offline) .card-head .patient,
-.card.alarming-1:not(.pi-offline) .card-head .alarm-item { color: var(--on-red); }
+.card.alarming-1:not(.pi-offline) .card-head .alarm-item,
+.card.alarming-1:not(.pi-offline) .card-head .mute-btn { color: var(--on-red); }
 .card.alarming-2:not(.pi-offline) .card-head .dev-name,
 .card.alarming-2:not(.pi-offline) .card-head .patient,
-.card.alarming-2:not(.pi-offline) .card-head .alarm-item { color: var(--on-amber); }
+.card.alarming-2:not(.pi-offline) .card-head .alarm-item,
+.card.alarming-2:not(.pi-offline) .card-head .mute-btn { color: var(--on-amber); }
 
 /* ── 小卡警報（疊在波形區上方，從 Paw 頂端往下堆疊；放大檢視改用 header 完整清單）───
  * 每則警報一條半透明色帶（依自身分級上色），多則往下排、會蓋到下方 Flow/Vol 波形；
@@ -462,6 +466,34 @@ body.detail-open { overflow: hidden; }
   cursor: pointer;
 }
 .close-btn:hover { background: var(--hover); color: var(--text-primary); }
+
+/* 大卡靜音鈕加大點擊區域；關閉鈕同樣以透明無框圖示呈現。 */
+.card.big .close-btn {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  opacity: 0.82;
+}
+.card.big .close-btn:hover {
+  background: transparent;
+  color: var(--text-primary);
+  opacity: 1;
+}
+.card.big .close-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.card.big .mute-btn {
+  width: 48px;
+  height: 30px;
+  font-size: 14px;
+}
+.card.big .close-btn {
+  width: 38px;
+  height: 32px;
+  padding: 0;
+  font-size: 20px;
+}
 
 /* 上半部左 2/3：三條波形 + 設定值。 */
 .card.big .monitor-main {
@@ -601,7 +633,24 @@ body.detail-open { overflow: hidden; }
 .loop-legend span:nth-child(2)::before { opacity: 0.45; }
 .loop-legend span:nth-child(3)::before { opacity: 0.22; }
 
-.alarm-history-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.alarm-history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-disabled) transparent;
+}
+.alarm-history-list::-webkit-scrollbar { width: 8px; }
+.alarm-history-list::-webkit-scrollbar-track { background: transparent; }
+.alarm-history-list::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  background-color: var(--text-disabled);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+.alarm-history-list::-webkit-scrollbar-thumb:hover { background-color: var(--text-label); }
+.alarm-history-list::-webkit-scrollbar-corner { background: transparent; }
 .alarm-history-row {
   display: grid;
   grid-template-columns: 62px minmax(0, 1fr) max-content;

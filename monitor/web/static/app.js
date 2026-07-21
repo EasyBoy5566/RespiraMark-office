@@ -294,7 +294,7 @@ function buildCard(dev) {
       <span class="spacer"></span>
       <button class="mute-btn" type="button"
               title="靜音警報2分鐘">🔔</button>
-      <button class="close-btn hidden">✕ 關閉</button>
+      <button class="close-btn hidden">✕</button>
     </div>
     <div class="monitor-main">
       <div class="waves"></div>
