@@ -271,7 +271,8 @@ async def run_checks():
                   "僅供觀察參考" in login_html)
         for path in ("/static/app.js", "/static/style.css", "/static/login.js",
                      "/static/sys.js", "/static/auth.js", "/static/admin.js",
-                     "/static/alarm_levels.js", "/static/footer.js"):
+                     "/static/alarm_levels.js", "/static/footer.js",
+                     "/static/alarm-sounds/config.json"):
             async with s.get(f"{BASE}{path}") as r:
                 check(f"靜態資源 {path}", r.status == 200)
         async with s.get(f"{BASE}/history/smoke-01") as r:
@@ -300,6 +301,9 @@ async def run_checks():
         app_js = await r.text() if r.status == 200 else ""
         check("前端含呼吸器警報音與卡片靜音鈕",
               "mute-btn" in app_js and "unlockAudio" in app_js)
+        check("前端含可自訂警報音與合成音備援",
+              "alarmSoundConfigReady" in app_js and
+              "playConfiguredAlarmSound" in app_js and "soundAlarm" in app_js)
         check("單床詳細畫面含 LOOP、警報紀錄與預測模組插槽",
               "loop-select" in app_js and "loadAlarmHistory" in app_js
               and "拔管成功率" in app_js and "呼吸不同步預測" in app_js)

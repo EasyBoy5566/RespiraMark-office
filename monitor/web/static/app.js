@@ -138,15 +138,70 @@ try { initCols = parseInt(localStorage.getItem("rm-cols"), 10) || DEFAULT_COLS; 
 applyCols(initCols);
 
 // ── 呼吸器警報音（呼吸器發出 level 1/2 警報時鳴響；靜音鈕在卡片右上角）──
-// 純 Web Audio 合成短嗶聲（零相依、不用音檔）。瀏覽器自動播放政策要求
+// 可由 alarm-sounds/config.json 依「codepage:alarm code」指定音檔；未設定、載入失敗或
+// 音檔尚未完成解碼時，仍使用既有 Web Audio 合成短嗶聲，確保警報不會靜默消失。
+// 瀏覽器自動播放政策要求
 // 使用者先與頁面互動過才可出聲，故以首次點擊/按鍵解鎖共用 AudioContext；
 // 解鎖前只有視覺警示（狀態列警報 + 卡片警示外框），不影響任何功能。
 let audioCtx = null;
+const ALARM_SOUND_BASE = "/static/alarm-sounds/";
+const alarmSoundConfig = { alarms: {}, levels: {} };
+const alarmSoundBuffers = new Map();
+const alarmSoundLoads = new Map();
+
+function alarmSoundFileUrl(fileName) {
+  const name = typeof fileName === "string" ? fileName.trim() : "";
+  // 僅接受資料夾內的單一檔名，避免設定檔載入外部網址或跳脫 static 目錄。
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return "";
+  return `${ALARM_SOUND_BASE}${encodeURIComponent(name)}`;
+}
+
+const alarmSoundConfigReady = fetch(`${ALARM_SOUND_BASE}config.json`, { cache: "no-store" })
+  .then((response) => response.ok ? response.json() : null)
+  .then((config) => {
+    if (!config || typeof config !== "object") return;
+    if (config.alarms && typeof config.alarms === "object") alarmSoundConfig.alarms = config.alarms;
+    if (config.levels && typeof config.levels === "object") alarmSoundConfig.levels = config.levels;
+  })
+  .catch(() => { /* 設定檔不可用時沿用合成音 */ });
+
+function loadAlarmSound(url) {
+  if (!audioCtx || !url) return Promise.resolve(null);
+  if (alarmSoundLoads.has(url)) return alarmSoundLoads.get(url);
+  const loading = fetch(url, { cache: "no-store" })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.arrayBuffer();
+    })
+    .then((data) => audioCtx.decodeAudioData(data))
+    .then((buffer) => {
+      alarmSoundBuffers.set(url, buffer);
+      return buffer;
+    })
+    .catch(() => null);
+  alarmSoundLoads.set(url, loading);
+  return loading;
+}
+
+function preloadAlarmSounds() {
+  const files = [
+    ...Object.values(alarmSoundConfig.alarms),
+    ...Object.values(alarmSoundConfig.levels),
+  ];
+  for (const fileName of new Set(files)) {
+    const url = alarmSoundFileUrl(fileName);
+    if (url) loadAlarmSound(url);
+  }
+}
 
 function unlockAudio() {
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
+    const resumed = audioCtx.state === "suspended" ? audioCtx.resume() : Promise.resolve();
+    Promise.resolve(resumed)
+      .then(() => alarmSoundConfigReady)
+      .then(preloadAlarmSounds)
+      .catch(() => { /* 音檔不可用時沿用合成音 */ });
   } catch (e) { /* 不支援 Web Audio → 維持純視覺警示 */ }
 }
 window.addEventListener("pointerdown", unlockAudio);
@@ -163,6 +218,31 @@ function beep(freq, at, dur) {
   osc.start(at);
   osc.stop(at + dur);
   osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+}
+
+function configuredAlarmSoundUrl(alarm) {
+  if (!alarm) return "";
+  const cp = String(alarm.cp == null ? "" : alarm.cp).trim();
+  const code = String(alarm.code == null ? "" : alarm.code).trim().toUpperCase();
+  const exact = alarmSoundConfig.alarms[`${cp}:${code}`];
+  const fallback = alarmSoundConfig.levels[String(alarm.level)];
+  return alarmSoundFileUrl(exact || fallback);
+}
+
+function playConfiguredAlarmSound(alarm, at) {
+  const url = configuredAlarmSoundUrl(alarm);
+  if (!url) return false;
+  const buffer = alarmSoundBuffers.get(url);
+  if (!buffer) {
+    loadAlarmSound(url);
+    return false;
+  }
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioCtx.destination);
+  source.start(at);
+  source.onended = () => source.disconnect();
+  return true;
 }
 
 function isMuted(dev) {
@@ -182,24 +262,30 @@ function updateMuteBtn(dev) {
   }
 }
 
-// 取所有「線上、未靜音、有 level 1/2 警報」裝置中最嚴重的等級鳴響：
+// 取所有「線上、未靜音、有 level 1/2 警報」裝置中最嚴重、同級優先值最高的警報鳴響：
 // level 1（危及生命）三連短高音、週期短；level 2 兩連低音、週期長。
 // Pi 離線後警報資料已不可信，不列入鳴響（畫面仍以離線紅框提示）。
 let lastBeepAt = 0;
 setInterval(() => {
-  let worst = 0;
+  let selected = null;
   for (const dev of devices.values()) {
     updateMuteBtn(dev);
-    if (!dev.online || isMuted(dev) || !dev.alarmLevel) continue;
-    if (!worst || dev.alarmLevel < worst) worst = dev.alarmLevel;
+    const alarm = dev.soundAlarm;
+    if (!dev.online || isMuted(dev) || !alarm) continue;
+    if (!selected || alarm.level < selected.level
+        || (alarm.level === selected.level && (alarm.prio || 0) > (selected.prio || 0))) {
+      selected = alarm;
+    }
   }
-  if (!worst) { lastBeepAt = 0; return; }
+  if (!selected) { lastBeepAt = 0; return; }
   if (!audioCtx || audioCtx.state !== "running") return;   // 尚未解鎖
+  const worst = selected.level;
   const now = Date.now() / 1000;
   if (now - lastBeepAt < (worst === 1 ? 2.5 : 5.0)) return;
   lastBeepAt = now;
   try {
     const t = audioCtx.currentTime + 0.02;
+    if (playConfiguredAlarmSound(selected, t)) return;
     if (worst === 1) { beep(988, t, 0.16); beep(988, t + 0.24, 0.16); beep(988, t + 0.48, 0.16); }
     else { beep(660, t, 0.2); beep(660, t + 0.35, 0.2); }
   } catch (e) { /* 靜默忽略 */ }
@@ -222,6 +308,7 @@ function ensureDev(id) {
     card: null,
     online: false,        // Pi ↔ 伺服器連線（由 link 訊息維護）
     alarmLevel: 0,        // 目前最嚴重警報等級（0 = 無 level 1/2 警報）
+    soundAlarm: null,     // 目前拿來選擇警報音的完整警報（含 cp/code/level/prio）
     muteUntil: 0,         // 靜音截止時間戳（ms）；按一次靜音 MUTE_SEC 秒，再按取消
     muteBtn: null,        // 右上角靜音鈕（buildCard 填入）
     loopStarted: false,
@@ -850,6 +937,7 @@ function onAlarm(dev, m) {
   // level 3（不影響生命）不觸發卡片警示外框，只在列表中以淡藍顯示
   dev.card.classList.remove("alarming-1", "alarming-2");
   dev.alarmLevel = 0;
+  dev.soundAlarm = null;
   if (!alarms.length) {
     if (dev.big) loadAlarmHistory(dev);
     return;
@@ -878,6 +966,7 @@ function onAlarm(dev, m) {
   if (worst <= 2) {
     dev.card.classList.add(`alarming-${worst}`);
     dev.alarmLevel = worst;           // 有 level 1/2 才鳴響（level 3 只有視覺）
+    dev.soundAlarm = alarms[0];        // 保留 cp/code，供每種警報選擇不同音檔
   }
   if (dev.big) loadAlarmHistory(dev);
 }
