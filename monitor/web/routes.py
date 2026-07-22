@@ -73,18 +73,19 @@ async def admin_remove_device(request):
 
 
 async def admin_syslog(request):
-    """GET /api/admin/syslog/{device} → 下載該裝置的長期 sys CSV"""
+    """GET /api/admin/syslog/{device} → 從 SQLite 匯出該裝置七天 sys CSV。"""
     hub = request.app["hub"]
     device = request.match_info["device"]
-    path = hub.sys_csv_path(device)
-    if not path or not os.path.exists(path):
+    content = hub.sys_history_csv(device)
+    if not content:
         raise web.HTTPNotFound(
-            text='{"error": "尚無 CSV 紀錄（未啟用落地或還沒寫入資料）"}',
+            text='{"error": "最近七天尚無系統狀態紀錄"}',
             content_type="application/json")
     audit("admin_download_syslog", actor=_actor(request), device=device)
-    return web.FileResponse(path, headers={
+    safe_device = "".join(c if c.isalnum() or c in "-_." else "_" for c in device)
+    return web.Response(body=("\ufeff" + content).encode("utf-8"), headers={
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": f'attachment; filename="{os.path.basename(path)}"',
+        "Content-Disposition": f'attachment; filename="sys_{safe_device or "device"}.csv"',
     })
 
 

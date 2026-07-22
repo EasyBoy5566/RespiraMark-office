@@ -1,14 +1,15 @@
 ﻿# backup.ps1 — 備份設定/帳號/裝置權杖/憑證/日誌（IMPROVEMENT_PLAN.md W-205）
 # ================================================================================
-# 用法（在 respiramark-office 資料夾執行；建議用 Windows 工作排程器每日排程）：
+# 用法（在 respiramark-office 資料夾執行；有外部備份空間時才手動或排程執行）：
 #   powershell -ExecutionPolicy Bypass -File tools\backup.ps1 -Dest D:\RespiraMarkBackup
 #
 # 備份內容：
 #   config.json, accounts.json, devices.json,
 #   certs\server.pem, certs\server.key（**不含 ca.key**——CA 私鑰依規定離線保存，
 #   絕不進自動備份，見 IMPROVEMENT_PLAN.md W-204/F-13），
-#   sys_logs\、logs\audit.log
-#   依目前資源決策，alarm_logs\alarm_history.sqlite3 刻意不納入備份。
+#   logs\audit.log
+#   依目前資源決策，logs\alarm_logs\ 與 logs\sys_logs\ 的七天歷史 DB
+#   刻意不納入備份，避免佔用額外空間。
 # 打包成 respiramark_backup_<日期時間>.zip，存到 -Dest 指定的資料夾（建議是外接碟
 # 或網路磁碟，不要跟伺服器本機是同一顆硬碟）。-KeepDays 內的備份自動保留，較舊的清掉。
 #
@@ -49,7 +50,6 @@ Copy-IfExists "accounts.json"
 Copy-IfExists "devices.json"
 Copy-IfExists "certs\server.pem"
 Copy-IfExists "certs\server.key"          # 注意：刻意不複製 certs\ca.key
-Copy-IfExists "sys_logs"
 Copy-IfExists "logs\audit.log"
 
 if (Test-Path (Join-Path $ProjectRoot "certs\ca.key")) {

@@ -2,7 +2,7 @@
  * - 設備健康總表：卡片格線（視覺語言比照主儀表板 .card），每張卡是連線 /
  *   CPU / 記憶體 / 溫度 / 磁碟 / 降頻 / 開機時長
  * - 點「趨勢」在卡片內就地展開系統狀態趨勢圖（RMSys 共用繪圖，與儀表板同一套門檻）
- * - 移除離線裝置（DELETE /api/admin/devices）、下載長期 sys CSV、帳號唯讀清單
+ * - 移除離線裝置（DELETE /api/admin/devices）、匯出七天 sys CSV、帳號唯讀清單
  * - 連線狀態（呼吸器序列埠 status / 伺服器 link）顯示在卡片標題列（儀表板不再顯示）
  * - 資料來源與儀表板相同：WebSocket /ws（本頁忽略波形等臨床訊息，只用 sys/link/status）
  */
@@ -93,7 +93,7 @@ function buildCard(dev) {
   const [trendBtn, csvBtn, alarmBtn, removeBtn] = card.querySelectorAll(".admin-card-foot button");
   trendBtn.addEventListener("click", () => toggleTrend(dev));
   csvBtn.addEventListener("click", () => downloadCsv(dev.id));
-  csvBtn.title = "下載這台機器的長期系統狀態紀錄（伺服器端 CSV）";
+  csvBtn.title = "從 SQLite 匯出這台機器最近 7 天的系統狀態 CSV";
   alarmBtn.addEventListener("click", () => downloadAlarmLog(dev.id));
   alarmBtn.title = "下載這台機器最近 7 天的警報歷史（由 SQLite 匯出 CSV）";
   removeBtn.addEventListener("click", () => removeDevice(dev.id));

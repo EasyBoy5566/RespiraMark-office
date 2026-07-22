@@ -9,7 +9,6 @@ TelemetryHub — 裝置狀態管理與瀏覽器廣播層
 """
 
 import asyncio
-import csv
 import json
 import logging
 import os
@@ -18,6 +17,7 @@ from collections import deque
 
 from monitor.audit import audit
 from monitor.domain.alarm_log import AlarmLog
+from monitor.domain.sys_log import SysLog
 
 PROTO_VERSION = 1
 
@@ -27,15 +27,6 @@ STATEFUL_TYPES = ("status", "device_info", "params", "alarm", "sys")
 
 # 串流類型：即時轉發、不保留
 STREAM_TYPES = ("wave",)
-
-# Pi 系統狀態 CSV 欄位（不含病人代碼；device 已在檔名，見 PROTOCOL.md）
-SYS_CSV_FIELDS = ("cpu", "mem", "temp", "disk_pct", "disk_free", "throttled", "uptime")
-
-
-def _safe_name(device: str) -> str:
-    """機台編號 → 可安全放進檔名的字串（濾掉路徑分隔等字元，防呆）"""
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in device) or "device"
-
 
 class DeviceState:
     """單一 Pi 裝置的最新狀態（供 snapshot 用）"""
@@ -49,15 +40,14 @@ class DeviceState:
         self.proto = None
         self.latest = {}           # type -> 最新一則訊息（僅 STATEFUL_TYPES）
         self.sys_history = deque(maxlen=sys_history_max)  # 近段 sys 樣本（趨勢圖用）
-        self.sys_csv = None        # 惰性開啟的 CSV 檔案 handle（None = 未開/停用）
-        self.sys_csv_failed = False  # 開檔或寫入失敗過 → 不再嘗試，避免灌爆 log
-        self.sys_csv_last_ts = 0.0  # 上次寫入 CSV 的時間（節流用；0 → 下一筆立刻寫）
+        self.sys_persist_last_ts = 0.0  # 上次寫入 SQLite 的伺服器時間（節流用）
 
 
 class TelemetryHub:
     def __init__(self, offline_timeout: float = 5.0, max_devices: int = 16,
-                 sys_history_max: int = 720, sys_log_dir: str = "",
-                 sys_csv_interval: float = 60.0, max_viewers: int = 50,
+                 sys_history_max: int = 720, sys_db_path: str = "",
+                 sys_persist_interval: float = 60.0, sys_retention_days: int = 7,
+                 max_viewers: int = 50,
                  alarm_db_path: str = "", alarm_retention_days: int = 7,
                  alarm_log_dir: str = None):
         self.log = logging.getLogger("hub")
@@ -65,16 +55,9 @@ class TelemetryHub:
         self.max_devices = max_devices
         self.max_viewers = max_viewers
         self.sys_history_max = sys_history_max
-        # CSV 寫入節流間隔（秒）：只放慢長期落地檔，即時畫面/記憶體歷史仍隨 Pi 送出頻率更新
-        self.sys_csv_interval = sys_csv_interval
-        # 系統狀態 CSV 落地目錄（空字串 = 停用）。存在則長期趨勢寫入此處，重開伺服器不丟。
-        self.sys_log_dir = sys_log_dir
-        if sys_log_dir:
-            try:
-                os.makedirs(sys_log_dir, exist_ok=True)
-            except OSError as e:
-                self.log.warning(f"系統狀態 CSV 目錄無法建立，停用落地: {e}")
-                self.sys_log_dir = ""
+        # 只放慢長期落地；即時畫面與記憶體歷史仍隨 Pi 送出頻率更新。
+        self.sys_persist_interval = max(0.0, float(sys_persist_interval))
+        self.sys_log = SysLog(sys_db_path, sys_retention_days)
         # alarm_log_dir 僅保留舊呼叫端相容性；新設定一律直接指定 SQLite 路徑。
         if not alarm_db_path and alarm_log_dir:
             alarm_db_path = os.path.join(alarm_log_dir, "alarm_history.sqlite3")
@@ -126,7 +109,7 @@ class TelemetryHub:
             st.latest[t] = msg
             if t == "sys":
                 st.sys_history.append(msg)   # 記憶體歷史（趨勢圖）
-                self._append_sys_csv(st, msg)  # 長期落地（Excel 事後分析）
+                self._append_sys_log(st, msg)  # 七天 SQLite；CSV 僅在下載時產生
             elif t == "alarm":
                 self.alarm_log.on_alarm(device, msg.get("alarms", []), msg.get("ts"))
         elif t not in STREAM_TYPES:
@@ -161,11 +144,6 @@ class TelemetryHub:
             return "unknown"
         if st.online:
             return "online"
-        if st.sys_csv is not None:
-            try:
-                st.sys_csv.close()
-            except OSError:
-                pass
         del self.devices[device]
         self.alarm_log.forget(device)
         self.log.info(f"管理員移除離線裝置: {device}")
@@ -173,11 +151,9 @@ class TelemetryHub:
         self.broadcast({"type": "device_removed", "device": device})
         return "ok"
 
-    def sys_csv_path(self, device: str):
-        """該裝置長期 sys CSV 的檔案路徑（供下載端點）；未啟用落地回傳 None"""
-        if not self.sys_log_dir:
-            return None
-        return os.path.join(self.sys_log_dir, f"sys_{_safe_name(device)}.csv")
+    def sys_history_csv(self, device: str):
+        """從 SQLite 即時產生該裝置最近七天的系統狀態 CSV。"""
+        return self.sys_log.export_csv(device)
 
     def alarm_history_csv(self, device: str):
         """從 SQLite 即時產生該裝置的七天警報 episode CSV。"""
@@ -188,47 +164,19 @@ class TelemetryHub:
         return self.alarm_log.recent(device, limit)
 
     def close(self):
-        """關閉 CSV handle 與 SQLite，供伺服器正常停止及測試清理。"""
-        for st in self.devices.values():
-            if st.sys_csv is not None:
-                try:
-                    st.sys_csv.close()
-                except OSError:
-                    pass
-                st.sys_csv = None
+        """關閉 SQLite，供伺服器正常停止及測試清理。"""
+        self.sys_log.close()
         self.alarm_log.close()
 
-    def _append_sys_csv(self, st: DeviceState, msg: dict):
-        """把一則 sys 附加寫入該裝置的 CSV（只含系統指標，絕不寫病人代碼）。
-        依 sys_csv_interval 節流：長期 log 不需要跟即時畫面一樣密（預設 5s），
-        用伺服器到達時間判斷（不依賴 Pi 端時鐘準確度）。"""
-        if not self.sys_log_dir or st.sys_csv_failed:
+    def _append_sys_log(self, st: DeviceState, msg: dict):
+        """節流後寫入 SQLite；只含系統指標，絕不寫病人代碼。"""
+        if not self.sys_log.enabled:
             return
         now = time.time()
-        if now - st.sys_csv_last_ts < self.sys_csv_interval:
+        if now - st.sys_persist_last_ts < self.sys_persist_interval:
             return
-        st.sys_csv_last_ts = now
-        try:
-            if st.sys_csv is None:
-                path = self.sys_csv_path(st.device)
-                is_new = not os.path.exists(path)
-                st.sys_csv = open(path, "a", newline="", encoding="utf-8")
-                if is_new:
-                    csv.writer(st.sys_csv).writerow(("time",) + SYS_CSV_FIELDS)
-            ts = msg.get("ts") or time.time()
-            row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))]
-            row += [msg.get(k, "") if msg.get(k) is not None else "" for k in SYS_CSV_FIELDS]
-            csv.writer(st.sys_csv).writerow(row)
-            st.sys_csv.flush()
-        except OSError as e:
-            self.log.warning(f"{st.device} 系統狀態 CSV 寫入失敗，停用該裝置落地: {e}")
-            st.sys_csv_failed = True
-            try:
-                if st.sys_csv:
-                    st.sys_csv.close()
-            except OSError:
-                pass
-            st.sys_csv = None
+        st.sys_persist_last_ts = now
+        self.sys_log.record(st.device, msg, received_at=now)
 
     async def watchdog(self):
         """TCP 沒斷但資料停了（例如 Wi-Fi 半死）→ 逾時判離線"""

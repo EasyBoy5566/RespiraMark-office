@@ -37,6 +37,13 @@ def _resolve(path: str) -> str:
     return path
 
 
+def _resolve_log_path(log_dir: str, path: str) -> str:
+    """日誌內的相對路徑一律從統一 log_dir 解析。"""
+    if path and not os.path.isabs(path):
+        return os.path.normpath(os.path.join(log_dir, path))
+    return path
+
+
 def build_ssl_context(cfg: dict):
     """依設定建立伺服器 TLS context；未設定回傳 None（明文，僅限開發）。
     設了卻讀不到檔案 → 直接結束：寧可不啟動，也不要靜默退回明文。"""
@@ -169,8 +176,9 @@ async def main():
     setup_server_log(cfg)
     setup_audit_log(cfg)
 
-    sys_log_dir = _resolve(str(cfg.get("sys_log_dir") or ""))
-    alarm_db_path = _resolve(str(cfg.get("alarm_db_path") or ""))
+    log_dir = _resolve(str(cfg.get("log_dir") or "logs"))
+    sys_db_path = _resolve_log_path(log_dir, str(cfg.get("sys_db_path") or ""))
+    alarm_db_path = _resolve_log_path(log_dir, str(cfg.get("alarm_db_path") or ""))
 
     # 安全設定（TLS 與登入）
     ssl_ctx = build_ssl_context(cfg)
@@ -190,8 +198,9 @@ async def main():
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
                        max_devices=int(cfg["max_devices"]),
                        sys_history_max=int(cfg["sys_history_max"]),
-                       sys_log_dir=sys_log_dir,
-                       sys_csv_interval=float(cfg["sys_csv_interval"]),
+                       sys_db_path=sys_db_path,
+                       sys_persist_interval=float(cfg["sys_persist_interval"]),
+                       sys_retention_days=int(cfg["sys_retention_days"]),
                        max_viewers=int(cfg["max_viewers"]),
                        alarm_db_path=alarm_db_path,
                        alarm_retention_days=int(cfg["alarm_retention_days"]))

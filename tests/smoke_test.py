@@ -44,10 +44,11 @@ VIEWER_USER = "smokeview"
 VIEWER_PASS = "SmokeView123"
 
 TMP = tempfile.gettempdir()
-SYS_LOG_DIR = os.path.join(TMP, "respiramark_smoke_syslogs")
-ALARM_LOG_DIR = os.path.join(TMP, "respiramark_smoke_alarmlogs")
-ALARM_DB_PATH = os.path.join(ALARM_LOG_DIR, "alarm_history.sqlite3")
 LOG_DIR = os.path.join(TMP, "respiramark_smoke_logs")
+SYS_LOG_DIR = os.path.join(LOG_DIR, "sys_logs")
+SYS_DB_PATH = os.path.join(SYS_LOG_DIR, "sys_history.sqlite3")
+ALARM_LOG_DIR = os.path.join(LOG_DIR, "alarm_logs")
+ALARM_DB_PATH = os.path.join(ALARM_LOG_DIR, "alarm_history.sqlite3")
 CERT_DIR = os.path.join(TMP, "respiramark_smoke_certs")
 ACCOUNTS = os.path.join(TMP, "respiramark_smoke_accounts.json")
 BASE = f"https://localhost:{WEB_PORT}"
@@ -380,7 +381,7 @@ async def run_checks():
 
     check("觀看端數達上限，新連線被拒（503）", await check_max_viewers(authed))
 
-    # 系統狀態（sys）全鏈：即時廣播 → HTTP 歷史端點 → CSV 落地
+    # 系統狀態（sys）全鏈：即時廣播 → HTTP 歷史端點 → SQLite 落地
     sysmsgs = [m for m in msgs if m["type"] == "sys"]
     check("sys 有廣播到瀏覽器", any("cpu" in m for m in sysmsgs),
           f"共 {len(sysmsgs)} 則")
@@ -392,10 +393,13 @@ async def run_checks():
     async with authed.get(f"{BASE}/history/nope") as r:
         empty = (await r.json()).get("samples") if r.status == 200 else None
     check("未知裝置 history 回傳空清單", empty == [])
-    csv_path = os.path.join(SYS_LOG_DIR, "sys_smoke-01.csv")
-    ok_csv = os.path.exists(csv_path) and sum(
-        1 for _ in open(csv_path, encoding="utf-8")) >= 2
-    check("sys 已落地 CSV（含表頭+資料）", ok_csv, csv_path)
+    sys_rows = 0
+    if os.path.exists(SYS_DB_PATH):
+        with sqlite3.connect(SYS_DB_PATH) as db:
+            sys_rows = db.execute(
+                "SELECT COUNT(*) FROM system_sample WHERE device_id = ?",
+                ("smoke-01",)).fetchone()[0]
+    check("sys 已落地 SQLite", sys_rows >= 1, f"{sys_rows} 筆")
 
     # ── ingest 連線防護（IMPROVEMENT_PLAN.md W-101/W-102）───────────
     # 放在這裡（而非測試前段）：這幾項合計要等數秒逾時，若放前段會延後
@@ -447,7 +451,11 @@ async def run_checks():
     async with authed.get(f"{BASE}/api/admin/syslog/smoke-01") as r:
         body = await r.text() if r.status == 200 else ""
         check("admin 可下載 sys CSV（含表頭）",
-              r.status == 200 and body.startswith("time,"), f"{len(body)} bytes")
+              r.status == 200 and body.lstrip("\ufeff").startswith("time,"),
+              f"{len(body)} bytes")
+    check("sys 歷史使用 SQLite 落地", os.path.exists(SYS_DB_PATH))
+    check("伺服器端不產生 sys CSV",
+          not os.path.exists(os.path.join(SYS_LOG_DIR, "sys_smoke-01.csv")))
     async with authed.get(f"{BASE}/api/admin/syslog/nope") as r:
         check("未知裝置 CSV 回 404", r.status == 404)
 
@@ -558,20 +566,16 @@ def prepare_certs_and_accounts(log_file) -> bool:
 def main():
     global CLIENT_SSL, SMOKE3_PROC
     # 測試專用設定檔（放系統暫存目錄，不碰專案的 config.json）
-    for old in ("sys_smoke-01.csv", "sys_smoke-02.csv", "sys_smoke-03.csv"):
-        try:
-            os.remove(os.path.join(SYS_LOG_DIR, old))
-        except OSError:
-            pass
     try:
         os.remove(os.path.join(LOG_DIR, "audit.log"))     # 每次重建，避免舊測試殘留
     except OSError:
         pass
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.remove(ALARM_DB_PATH + suffix)
-        except OSError:
-            pass
+    for db_path in (SYS_DB_PATH, ALARM_DB_PATH):
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except OSError:
+                pass
 
     log_path = os.path.join(TMP, "respiramark_smoke_server.log")
     log_file = open(log_path, "w", encoding="utf-8")
@@ -593,8 +597,10 @@ def main():
                    "ingest_hello_timeout": HELLO_TIMEOUT,
                    "ingest_idle_timeout": IDLE_TIMEOUT,
                    "max_viewers": MAX_VIEWERS,
-                   "sys_log_dir": SYS_LOG_DIR,
-                   "alarm_db_path": ALARM_DB_PATH,
+                   "sys_db_path": os.path.join("sys_logs", "sys_history.sqlite3"),
+                   "sys_persist_interval": 60.0,
+                   "sys_retention_days": 7,
+                   "alarm_db_path": os.path.join("alarm_logs", "alarm_history.sqlite3"),
                    "alarm_retention_days": 7,
                    "tls_cert": os.path.join(CERT_DIR, "server.pem"),
                    "tls_key": os.path.join(CERT_DIR, "server.key"),

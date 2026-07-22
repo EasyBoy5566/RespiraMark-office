@@ -12,6 +12,8 @@ conn_seq 連線世代、watchdog 逾時判離線、max_devices 上限、
 """
 
 import asyncio
+import csv
+import io
 import json
 import os
 import shutil
@@ -238,6 +240,32 @@ class AlarmLogWiringTest(unittest.TestCase):
         rows = hub.alarm_history("pi-01")
         self.assertEqual([row["status"] for row in rows], ["active", "unknown"])
         self.assertEqual(rows[1]["end_reason"], "device_offline")
+
+
+class SysLogWiringTest(unittest.TestCase):
+    """確認 Hub 會節流寫入 SysLog，下載時才產生 CSV。"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="rm_hub_syslog_test_")
+        self.db_path = os.path.join(self.dir, "sys.sqlite3")
+        self.hub = TelemetryHub(sys_db_path=self.db_path,
+                                sys_persist_interval=60.0)
+
+    def tearDown(self):
+        self.hub.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_sys_message_reaches_sqlite_and_keeps_csv_shape(self):
+        device, seq = self.hub.device_hello(hello_msg())
+        msg = {"type": "sys", "ts": 1_700_000_000, "cpu": 12.3,
+               "mem": 45.6, "temp": 52.1, "disk_pct": 61.2,
+               "disk_free": 10.5, "throttled": "0x0", "uptime": 3600}
+        self.hub.device_message(device, seq, msg)
+        self.hub.device_message(device, seq, dict(msg, cpu=99.0))
+
+        content = self.hub.sys_history_csv(device)
+        self.assertTrue(content.startswith("time,cpu,mem,temp,disk_pct,disk_free,"))
+        self.assertEqual(len(list(csv.DictReader(io.StringIO(content)))), 1)
 
 
 class SnapshotTest(unittest.TestCase):

@@ -12,13 +12,7 @@ accounts.json
 devices.json
 certs/
 
-# Pi 系統狀態長期落地 CSV（每台伺服器各自累積，不進 git）
-sys_logs/
-
-# 警報歷史 SQLite（含既有舊版 CSV；每台伺服器各自累積，不進 git）
-alarm_logs/
-
-# 審計/運行日誌（每台伺服器各自累積，不進 git）
+# 全部執行期日誌：server/audit、alarm SQLite、sys SQLite
 logs/
 
 # 系統

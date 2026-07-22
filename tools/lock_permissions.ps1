@@ -24,7 +24,7 @@ param(
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 # 敏感檔案/目錄：帳號密碼雜湊、裝置 token 雜湊、一般設定、TLS 私鑰、各種 log
-$targets = @("accounts.json", "devices.json", "config.json", "certs", "logs", "alarm_logs", "sys_logs")
+$targets = @("accounts.json", "devices.json", "config.json", "certs", "logs")
 
 foreach ($rel in $targets) {
     $path = Join-Path $ProjectRoot $rel

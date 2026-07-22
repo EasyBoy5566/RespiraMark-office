@@ -25,11 +25,14 @@ DEFAULTS = {
     "max_viewers": 50,         # 同時瀏覽器觀看端（WebSocket）數上限，超過拒絕新連線
     # Pi 系統狀態（sys）：記憶體保留的樣本數（趨勢圖用；720 ≈ 1 小時 @ 5s）
     "sys_history_max": 720,
-    # 系統狀態長期落地目錄（相對專案根目錄；空字串 = 不落地，只留記憶體歷史）
-    "sys_log_dir": "sys_logs",
-    # 秒，CSV 寫入節流間隔：只影響長期落地檔，不影響即時畫面/記憶體歷史（仍隨 Pi 送出頻率更新）
-    "sys_csv_interval": 60.0,
-    # 警報 episode SQLite（相對專案根目錄；空字串 = 不落地；不含病歷號與波形）
+    # 所有日誌的統一根目錄；下列相對路徑都從此處解析
+    "log_dir": "logs",
+    # Pi 系統狀態 SQLite（空字串 = 不落地，只留記憶體歷史）
+    "sys_db_path": "sys_logs/sys_history.sqlite3",
+    # 秒，SQLite 寫入節流間隔；不影響即時畫面/記憶體歷史
+    "sys_persist_interval": 60.0,
+    "sys_retention_days": 7,
+    # 警報 episode SQLite（相對 log_dir；空字串 = 不落地；不含病歷號與波形）
     "alarm_db_path": "alarm_logs/alarm_history.sqlite3",
     # 已結束警報保留天數；作用中的警報不會因期限而刪除
     "alarm_retention_days": 7,
@@ -42,7 +45,6 @@ DEFAULTS = {
     "session_idle_minutes": 30.0,   # 閒置逾時（sliding）自動登出；0 = 不逾時（護理站看板用）
     "session_absolute_hours": 12.0,  # 登入後最長可用時數，即使一直有操作也會過期；0 = 不限（看板帳號用）
     "session_max": 200,        # session 總量上限，超過淘汰最久沒動作的一筆
-    "log_dir": "logs",         # 審計日誌落地目錄（logs/audit.log，10MB x 5 輪替）
     # ── 帳密驗證來源（W-307；local=本機 accounts.json，ldap=院內 LDAP/AD）──
     "auth_backend": "local",
     "ldap_server": "",             # 例如 "ldaps://ad.csh.org.tw"（含 scheme；用 ldaps:// 走加密）
