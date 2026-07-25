@@ -76,7 +76,7 @@ function applyTheme(theme) {
   refreshThemeColors();
   devices.forEach(setupCanvases);   // 用新顏色從歷史重播波形
   devices.forEach(drawLoop);
-  refitModeChips();                 // 版面（磚格寬）可能改變 → Mode 文字重新量寬縮字
+  relayoutParamStrips();            // 主題會改變卡片邊框／間距 → 重新判斷設定列能否完整顯示
 }
 
 // 明暗鈕：dark↔light 間切換（在 mono 時點它會退出到 light）
@@ -91,11 +91,12 @@ try { initTheme = localStorage.getItem("rm-theme") || "dark"; } catch (e) { /* �
 applyTheme(initTheme);
 
 // ── 版面欄數（2–8 欄，選擇存 localStorage）───────────────────────
-// 密度依欄數自動分級：欄數越多卡片越精簡（波形變矮、設定值列縮小→隱藏），
+// 密度依欄數自動分級：欄數越多卡片越精簡（波形與設定值字級逐級縮小），
 // 好讓一頁塞得下 ~20 床；分級門檻與各級樣式見 style.css 的 main#grid[data-density]。
+// 設定值依「實際卡片寬度 × 該模式的參數數量」決定顯示或整列隱藏，永不折成第二列。
 // 警報/床號/波形不論密度一律保留；完整資料點卡片放大仍看得到。
 const colsSelect = document.getElementById("colsSelect");
-const DEFAULT_COLS = 4;
+const DEFAULT_COLS = 5;
 const MIN_COLS = 2, MAX_COLS = 8;
 let currentCols = DEFAULT_COLS;
 
@@ -112,7 +113,7 @@ function applyCols(n) {
   try { localStorage.setItem("rm-cols", n); } catch (e) { /* 私密瀏覽等，忽略 */ }
   syncGridPlaceholders();          // 欄數改變時重新補齊末列空位
   devices.forEach(setupCanvases);   // 欄寬/波形高度改變 → 依新尺寸從歷史重畫
-  refitModeChips();                 // 欄寬改變 → Mode 文字重新量寬縮字
+  relayoutParamStrips();            // 欄寬改變 → 重排單列設定值，過窄時整列隱藏
 }
 
 let headerDismissTimer = null;
@@ -392,6 +393,7 @@ function buildCard(dev) {
 
   dev.card = card;
   grid.appendChild(card);
+  if (paramCardResizeObserver) paramCardResizeObserver.observe(card);
   setupCanvases(dev);
 }
 
@@ -431,6 +433,7 @@ function expand(dev) {
   requestAnimationFrame(() => {
     setupCanvases(dev);
     drawLoop(dev);
+    layoutParamStrip(dev.card.querySelector(".param-strip"));
   });
 }
 
@@ -444,6 +447,7 @@ function collapse(dev) {
   grid.appendChild(dev.card);
   sortGrid();
   setupCanvases(dev);
+  requestAnimationFrame(() => layoutParamStrip(dev.card.querySelector(".param-strip")));
 }
 
 // ── Canvas 初始化與重繪（尺寸改變時從歷史重播）───────────────────
@@ -777,32 +781,154 @@ function setPatient(dev, patient) {
   dev.card.querySelector(".patient").textContent = patient ? `病歷號: ${patient}` : "";
 }
 
-// 文字型設定值（Mode）自動縮字：從該密度的標準字級起，量寬度逐步縮到剛好單行放得下，
-// 讓 VC-SIMV 這類較長的模式完整顯示（短模式仍維持與其他數值相同大小）。
-function modeMaxPx() { return grid.dataset.density === "mid" ? 13 : 15; }
+// ── 小卡設定值單列排版 ───────────────────────────────────────────
+// 每個模式收到的 settings 數量不同（例如 PSV 可只有 3 個設定）；不可假設固定欄數。
+// 先以最低可讀字級量出每個晶片真正需要的寬度，再依內容比例分配整列：
+// Mode 或長標籤會自然取得較多空間。若所有晶片仍放不下，整列隱藏而非換列或顯示「…」。
+const PARAM_FONT_TIERS = {
+  full:    { keyMax: 11, valueMax: 15 },
+  mid:     { keyMax: 10, valueMax: 13 },
+  compact: { keyMax: 9,  valueMax: 11 },
+};
+const PARAM_KEY_MIN_PX = 8;
+const PARAM_VALUE_MIN_PX = 9;
+const PARAM_MODE_MIN_PX = 8;
+const PARAM_WIDTH_SAFETY_PX = 2;   // 補償瀏覽器小數像素取整，避免剛好多 1px 又溢位
 
-function fitText(el, maxPx, minPx = 8) {
-  el.style.fontSize = maxPx + "px";
-  if (!el.clientWidth) {
-    // 量到 0 寬（一次建很多床時版面尚未成形，或 compact 密度暫時隱藏）：
-    // 不能留著大字（會被 … 截斷），排下一個 frame 等版面成形後再量一次。
-    // 防呆：僅在「已接上 DOM 且已有寬度」時才重試 → compact 隱藏時不會無限迴圈。
-    requestAnimationFrame(() => {
-      if (el.isConnected && el.clientWidth) fitText(el, maxPx, minPx);
-    });
-    return;
+function paramFontTier(card) {
+  if (card.classList.contains("big") || window.matchMedia("(max-width: 800px)").matches) {
+    return PARAM_FONT_TIERS.full;
   }
+  return PARAM_FONT_TIERS[grid.dataset.density] || PARAM_FONT_TIERS.full;
+}
+
+function renderedTextWidth(el) {
+  if (!el.textContent) return 0;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const width = range.getBoundingClientRect().width;
+  range.detach();
+  return width;
+}
+
+function fitText(el, maxPx, minPx) {
+  if (!el.clientWidth) return false;
   let size = maxPx;
-  while (size > minPx && el.scrollWidth > el.clientWidth) {
-    size -= 0.5;
-    el.style.fontSize = size + "px";
+  el.style.fontSize = `${size}px`;
+  while (size > minPx && renderedTextWidth(el) > el.clientWidth + 0.25) {
+    size = Math.max(minPx, size - 0.5);
+    el.style.fontSize = `${size}px`;
+  }
+  return renderedTextWidth(el) <= el.clientWidth + 0.25;
+}
+
+function boxHorizontalSpace(el) {
+  const style = getComputedStyle(el);
+  return ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"]
+    .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+}
+
+function minimumChipWidth(chip) {
+  const key = chip.querySelector(".k");
+  const value = chip.querySelector(".val");
+  key.style.fontSize = `${PARAM_KEY_MIN_PX}px`;
+  value.style.fontSize = `${chip.classList.contains("mode") ? PARAM_MODE_MIN_PX : PARAM_VALUE_MIN_PX}px`;
+  return Math.ceil(
+    Math.max(renderedTextWidth(key), renderedTextWidth(value))
+    + boxHorizontalSpace(chip)
+    + PARAM_WIDTH_SAFETY_PX
+  );
+}
+
+function layoutExpandedParamStrip(strip, chips, tier) {
+  strip.classList.remove("params-hidden");
+  strip.setAttribute("aria-hidden", "false");
+  strip.style.removeProperty("grid-template-columns");
+  for (const chip of chips) {
+    fitText(chip.querySelector(".k"), tier.keyMax, PARAM_KEY_MIN_PX);
+    fitText(
+      chip.querySelector(".val"),
+      tier.valueMax,
+      chip.classList.contains("mode") ? PARAM_MODE_MIN_PX : PARAM_VALUE_MIN_PX
+    );
   }
 }
 
-function refitModeChips() {
-  const max = modeMaxPx();
-  document.querySelectorAll(".pchip.mode .val").forEach((el) => fitText(el, max));
+function layoutParamStrip(strip) {
+  if (!strip || !strip.isConnected) return false;
+  const card = strip.closest(".card");
+  const chips = [...strip.querySelectorAll(".pchip")];
+
+  if (!chips.length) {
+    strip.classList.add("params-hidden");
+    strip.setAttribute("aria-hidden", "true");
+    return false;
+  }
+
+  const tier = paramFontTier(card);
+  if (card.classList.contains("big")) {
+    layoutExpandedParamStrip(strip, chips, tier);
+    return true;
+  }
+
+  // 先解除上次的隱藏與欄寬，才能取得這次實際卡片寬度。
+  strip.classList.remove("params-hidden");
+  strip.setAttribute("aria-hidden", "false");
+  strip.style.removeProperty("grid-template-columns");
+
+  const minimumWidths = chips.map(minimumChipWidth);
+  const stripStyle = getComputedStyle(strip);
+  const innerWidth = strip.clientWidth
+    - (parseFloat(stripStyle.paddingLeft) || 0)
+    - (parseFloat(stripStyle.paddingRight) || 0);
+  const gap = parseFloat(stripStyle.columnGap) || 0;
+  const trackSpace = innerWidth - gap * Math.max(0, chips.length - 1);
+  const requiredSpace = minimumWidths.reduce((sum, width) => sum + width, 0);
+
+  if (trackSpace + 0.5 < requiredSpace) {
+    strip.classList.add("params-hidden");
+    strip.setAttribute("aria-hidden", "true");
+    return false;
+  }
+
+  // fr 比例採用各晶片的最低需求寬度；剩餘空間會依內容比例放大，且始終只有一列。
+  strip.style.gridTemplateColumns = minimumWidths.map((width) => `${width}fr`).join(" ");
+  const allTextFits = chips.every((chip) => {
+    const keyFits = fitText(chip.querySelector(".k"), tier.keyMax, PARAM_KEY_MIN_PX);
+    const valueFits = fitText(
+      chip.querySelector(".val"),
+      tier.valueMax,
+      chip.classList.contains("mode") ? PARAM_MODE_MIN_PX : PARAM_VALUE_MIN_PX
+    );
+    return keyFits && valueFits;
+  });
+
+  if (!allTextFits) {
+    strip.classList.add("params-hidden");
+    strip.setAttribute("aria-hidden", "true");
+    return false;
+  }
+  return true;
 }
+
+function relayoutParamStrips() {
+  document.querySelectorAll(".param-strip").forEach(layoutParamStrip);
+}
+
+// 卡片寬度可能因欄數、視窗、主題邊框或放大／縮回而改變；直接觀察卡片，
+// 不依賴固定的欄數門檻。只處理寬度變化，避免設定列顯示／隱藏造成高度回呼迴圈。
+const observedParamCardWidths = new WeakMap();
+const paramCardResizeObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const width = entry.contentRect.width;
+        const previous = observedParamCardWidths.get(entry.target);
+        if (previous !== undefined && Math.abs(previous - width) < 0.5) continue;
+        observedParamCardWidths.set(entry.target, width);
+        layoutParamStrip(entry.target.querySelector(".param-strip"));
+      }
+    })
+  : null;
 
 function onParams(dev, m) {
   // 主模式（VC-SIMV…）與特性旗標（/AF…）分開：放大檢視「模式」顯示完整（含特性），
@@ -822,7 +948,7 @@ function onParams(dev, m) {
     if (!isNaN(litres) && litres < 10) settings.VTi = `${Math.round(litres * 1000)}`;
   }
 
-  // 小卡片參數列 = 設定值（動態依收到的項目建立）；Mode 是文字型、字較長 → 特別標記讓 CSS 給它兩欄寬且單行
+  // 小卡片參數列 = 該模式實際收到的設定值（數量不固定）；Mode 也算一項，但依文字需求自動取得較寬欄位。
   const strip = dev.card.querySelector(".param-strip");
   strip.innerHTML = "";
   for (const [k, v] of Object.entries(settings)) {
@@ -833,9 +959,7 @@ function onParams(dev, m) {
     chip.querySelector(".val").textContent = v;
     strip.appendChild(chip);
   }
-  // 全部晶片就位後再量寬度縮字（此時 auto-fit 欄寬已定），讓 Mode 文字依內容完整單行顯示
-  const modeVal = strip.querySelector(".pchip.mode .val");
-  if (modeVal) fitText(modeVal, modeMaxPx());
+  layoutParamStrip(strip);
   // 放大檢視：所有量測值（設定值不重複列表——小卡參數列在放大時仍看得到）
   fillTable(dev.card.querySelector(".kv-table.measured"), m.measured || {});
 }
@@ -994,6 +1118,7 @@ function onDeviceRemoved(id) {
     overlay.classList.add("hidden");
     document.body.classList.remove("detail-open");
   }
+  if (paramCardResizeObserver) paramCardResizeObserver.unobserve(dev.card);
   dev.card.remove();
   devices.delete(id);
   sortGrid();
@@ -1018,8 +1143,8 @@ function dispatch(m) {
         if (d[k]) MSG_HANDLERS[k](dev, d[k]);
       }
     }
-    // 一次建很多床後，等版面成形再統一量寬縮字，確保 Mode 文字不被 … 截斷
-    requestAnimationFrame(refitModeChips);
+    // 一次建很多床後，等格線完成再依每張卡的實際寬度統一排版。
+    requestAnimationFrame(relayoutParamStrips);
     return;
   }
   if (m.type === "device_removed") { onDeviceRemoved(m.device); return; }
@@ -1062,7 +1187,7 @@ window.addEventListener("resize", () => {
   resizeTimer = setTimeout(() => {
     devices.forEach(setupCanvases);
     devices.forEach(drawLoop);
-    refitModeChips();
+    relayoutParamStrips();
   }, 200);
 });
 

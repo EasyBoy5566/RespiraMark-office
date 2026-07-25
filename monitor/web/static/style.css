@@ -194,14 +194,16 @@ header.auto-hide.is-dismissed {
   padding: 14px 10px;
 }
 
-/* ── 卡片格線：欄數由使用者選（2–8 欄，見 app.js applyCols）；窄螢幕退回一欄 ──
+/* ── 卡片格線：欄數由使用者選（預設 5 欄，可選 2–8 欄，見 app.js applyCols）；窄螢幕退回一欄 ──
  * 密度依欄數自動分級（data-density 由 app.js 設；警報/床號/波形一律保留）：
  *   full（2–3 欄） 完整卡：波形 58px、參數晶片正常（「設定值」小標一律不顯示）
  *   mid （4–5 欄） 波形縮矮、內距收緊、參數晶片縮小
- *   compact（6–8 欄） 波形再縮、隱藏整個參數晶片區，只剩 標題列＋3 條迷你波形 */
+ *   compact（6–8 欄） 波形再縮、參數晶片再縮小
+ * 參數列是否顯示不再由欄數硬切：app.js 依卡片實際寬度與當下參數數量判斷；
+ * 放不下完整單列時整列隱藏，只剩標題列＋3 條波形。 */
 main#grid {
   display: grid;
-  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--cols, 5), minmax(0, 1fr));
   gap: 10px;
   padding: 10px;
   align-items: start;
@@ -214,7 +216,6 @@ main#grid {
 main#grid[data-density="mid"] .wave-row canvas { height: 46px; }
 main#grid[data-density="mid"] .waves { padding: 3px 7px 1px; }
 main#grid[data-density="mid"] .param-strip {
-  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
   gap: 3px; padding: 3px 7px 7px;
 }
 main#grid[data-density="mid"] .pchip .k { font-size: 10px; }
@@ -224,7 +225,10 @@ main#grid[data-density="mid"] .pchip .val { font-size: 13px; }
 main#grid[data-density="compact"] .wave-row { margin-bottom: 2px; }
 main#grid[data-density="compact"] .wave-row canvas { height: 38px; }
 main#grid[data-density="compact"] .waves { padding: 2px 6px 1px; }
-main#grid[data-density="compact"] .param-strip { display: none; }
+main#grid[data-density="compact"] .param-strip { gap: 2px; padding: 2px 6px 6px; }
+main#grid[data-density="compact"] .pchip { padding-inline: 3px; }
+main#grid[data-density="compact"] .pchip .k { font-size: 9px; }
+main#grid[data-density="compact"] .pchip .val { font-size: 11px; }
 main#grid[data-density="compact"] .card-head { padding: 4px 8px; }
 main#grid[data-density="compact"] .dev-name { font-size: 13px; }
 main#grid[data-density="compact"] .patient { font-size: 11px; }
@@ -237,7 +241,6 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
   main#grid[data-density] .wave-row canvas { height: 58px; }
   main#grid[data-density] .param-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
     gap: 4px; padding: 4px 8px 8px;
   }
 }
@@ -403,27 +406,31 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
 }
 .param-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px;
   padding: 4px 8px 8px;
 }
+.param-strip.params-hidden { display: none !important; }
 .pchip {
   background: var(--bg-secondary);
   border: 1px solid var(--divider);
   border-radius: 5px;
   padding: 2px 4px;
   text-align: center;
+  min-width: 0;
 }
-.pchip .k { font-size: 11px; color: var(--text-label); }
-.pchip .val { font-size: 15px; font-weight: bold; font-variant-numeric: tabular-nums; }
+.pchip .k { font-size: 11px; color: var(--text-label); white-space: nowrap; }
+.pchip .val {
+  font-size: 15px; font-weight: bold; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .pchip .u { font-size: 10px; color: var(--text-disabled); }
 
-/* 「Mode」是文字型設定值（比數字長）：盒子大小與其他晶片一致；字級由 app.js 依內容量寬度
- * 自動縮放（fitText），短模式維持與其他值相同大小、長模式才縮小以完整單行顯示；
- * 完整模式（含 /AF 等特性）仍可在放大檢視的「模式」欄看到 */
+/* Mode 是文字型設定值：app.js 先量文字需求、分配較寬欄位，再在可讀範圍內縮字。
+ * 不使用省略號；若小卡無法完整顯示所有設定，會隱藏整列。 */
 .pchip.mode .val {
   letter-spacing: -0.2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ── 放大檢視（overlay）─────────────────────────────────── */
@@ -520,6 +527,7 @@ body.detail-open { overflow: hidden; }
   border-top: 1px solid var(--divider);
 }
 .card.big .param-strip {
+  grid-auto-flow: row;
   grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
   padding: 3px 7px 6px;
 }
