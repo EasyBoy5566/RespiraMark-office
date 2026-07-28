@@ -236,6 +236,126 @@ function downloadAlarmLog(id) {
   downloadFile(`/api/admin/alarmlog/${encodeURIComponent(id)}`, `alarm_${id}.csv`);
 }
 
+// ── 裝置配對申請（PROTOCOL.md「裝置配對」）───────────────────────
+// 配對是偶發的人工佈建動作，不值得為它新增 WebSocket 訊息型別去動
+// snapshot/廣播契約——輪詢即可，且分頁不在前景時就停掉。
+const PAIR_POLL_MS = 5000;
+const pairSection = document.getElementById("pairSection");
+const pairList = document.getElementById("pairList");
+const pairEmpty = document.getElementById("pairEmpty");
+let pairTimer = null;
+let pairEnabled = true;         // 伺服器回 404（配對未啟用）後就不再嘗試
+const pairBusy = new Set();     // 已按下核可/拒絕、等待伺服器回應的 pair_id
+
+function renderPending(items) {
+  pairSection.classList.remove("hidden");
+  pairEmpty.classList.toggle("hidden", items.length > 0);
+  pairList.innerHTML = "";
+  for (const p of items) {
+    const row = document.createElement("div");
+    row.className = "pair-row";
+
+    const main = document.createElement("div");
+    main.className = "pair-main";
+    const name = document.createElement("span");
+    name.className = "pair-dev";
+    name.textContent = p.device_id;
+    main.appendChild(name);
+    if (p.renew) {
+      const badge = document.createElement("span");
+      badge.className = "pair-badge";
+      badge.textContent = "已配對過 · 核可將換發";
+      main.appendChild(badge);
+    }
+    const meta = document.createElement("span");
+    meta.className = "pair-meta";
+    meta.textContent = `來自 ${p.ip}` + (p.note ? ` · ${p.note}` : "") +
+      ` · 剩餘 ${Math.max(0, Math.round(p.expires_in / 60))} 分`;
+    main.appendChild(meta);
+    row.appendChild(main);
+
+    const code = document.createElement("span");
+    code.className = "pair-code";
+    code.textContent = p.code;
+    row.appendChild(code);
+
+    const acts = document.createElement("div");
+    acts.className = "pair-acts";
+    const ok = document.createElement("button");
+    ok.className = "admin-btn";
+    ok.type = "button";
+    ok.textContent = "核可";
+    ok.disabled = pairBusy.has(p.pair_id);
+    ok.addEventListener("click", () => approvePair(p));
+    const no = document.createElement("button");
+    no.className = "admin-btn danger";
+    no.type = "button";
+    no.textContent = "拒絕";
+    no.disabled = pairBusy.has(p.pair_id);
+    no.addEventListener("click", () => denyPair(p));
+    acts.append(ok, no);
+    row.appendChild(acts);
+
+    pairList.appendChild(row);
+  }
+}
+
+function pairAction(p, action, failMsg) {
+  pairBusy.add(p.pair_id);
+  fetch(`/api/admin/pair/${encodeURIComponent(p.pair_id)}/${action}`, { method: "POST" })
+    .then((r) => (r.ok ? null : r.json().then((j) => alert(j.error || failMsg))))
+    .catch(() => alert(`${failMsg}：無法連線伺服器`))
+    .then(() => {
+      pairBusy.delete(p.pair_id);
+      pollPending();               // 立刻重抓：處理過的申請會從清單消失
+    });
+}
+
+function approvePair(p) {
+  const warn = p.renew
+    ? `\n\n⚠ ${p.device_id} 先前已配對過，核可會換發新 token，舊的立即失效。`
+    : "";
+  if (!confirm(`核可 ${p.device_id}？\n請先確認該 Pi 螢幕顯示的確認碼是 ${p.code}。${warn}`)) return;
+  pairAction(p, "approve", "核可失敗");
+}
+
+function denyPair(p) {
+  if (!confirm(`拒絕 ${p.device_id} 的配對申請？`)) return;
+  pairAction(p, "deny", "拒絕失敗");
+}
+
+function pollPending() {
+  fetch("/api/admin/pair/pending")
+    .then((r) => {
+      if (r.status === 404) {          // 伺服器未啟用配對 → 本頁不顯示這個區塊
+        pairEnabled = false;
+        stopPairPolling();
+        return null;
+      }
+      return r.ok ? r.json() : null;
+    })
+    .then((data) => { if (data) renderPending(data.pending || []); })
+    .catch(() => { /* 連線問題由 WebSocket 的連線指示呈現，這裡靜默重試 */ });
+}
+
+function startPairPolling() {
+  if (pairTimer !== null || !pairEnabled) return;
+  pollPending();
+  pairTimer = setInterval(pollPending, PAIR_POLL_MS);
+}
+
+function stopPairPolling() {
+  if (pairTimer === null) return;
+  clearInterval(pairTimer);
+  pairTimer = null;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopPairPolling();
+  else startPairPolling();
+});
+startPairPolling();
+
 // ── 帳號唯讀清單 ─────────────────────────────────────────────────
 const ROLE_LABEL = { admin: "管理員", viewer: "檢視（看板）" };
 

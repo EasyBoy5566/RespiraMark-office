@@ -40,6 +40,9 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `DELETE /api/admin/devices/{device}` | 移除**離線**裝置（清出儀表板版面；裝置重新連上會自動回來）。線上裝置回 409、未知裝置回 404 |
 | `GET /api/admin/syslog/{device}` | 從 SQLite 即時匯出該裝置最近 7 天的 sys CSV（`sys_<裝置>.csv`）；無紀錄回 404 |
 | `GET /api/admin/alarmlog/{device}` | 從 SQLite 即時匯出該裝置最近 7 天的警報 episode CSV（`alarm_<裝置>.csv`，含開始、結束、持續秒數、狀態及警報內容）；只記機台編號與警報內容，不記病人代碼；無紀錄回 404 |
+| `GET /api/admin/pair/pending` | 待核可的裝置配對清單（見「裝置配對」一節） |
+| `POST /api/admin/pair/{pair_id}/approve` | 核可配對：產生 token、寫入 `devices.json`（token 不回傳給管理員） |
+| `POST /api/admin/pair/{pair_id}/deny` | 拒絕配對 |
 
 **單床詳細監測 API（viewer/admin 均可使用）**：
 
@@ -47,11 +50,84 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 |---|---|
 | `GET /api/alarm-history/{device}?limit=50` | 查看該裝置最近警報 episode（新到舊，最多 100 筆），回傳 `episodes`；狀態為 `active`／`cleared`／`unknown`（離線或重啟時無法確認真正解除點），供單床詳細監測畫面顯示；不含病人代碼 |
 
+## 裝置配對（HTTP :8080，取得 `hello` 用的 token）
+
+新裝置佈建用：**Pi 端輸入伺服器位址送出配對申請 → 管理員在 `/admin` 核可 → Pi 自動領取 token 並寫入自己的 `telemetry.json`**，全程不需要人工複製貼上 token（`tools/make_device.py` 保留為 fallback）。走 HTTP :8080，**TCP 8765 的 ingest 協議完全不動**（它是純單向串流，不回傳任何資料）。
+
+```
+Pi ──POST /api/pair/request──▶ 伺服器（產生 pair_id + 6 位確認碼）
+Pi ──GET  /api/pair/poll/{pair_id}（每 3 秒）──▶ 等待核可
+                管理員在 /admin 核對「Pi 螢幕上的 6 位碼」與「網頁上的 6 位碼」一致 → 核可
+Pi ◀── {"status":"approved", "token": ...} 一次性領取 → 寫 telemetry.json → 以新 token 連 8765
+```
+
+- **6 位確認碼是給人核對用的，不是憑證**：它防的是「管理員誤核可到別台裝置」。真正的能力憑證是 `pair_id`（高熵隨機字串），只有發出申請的那台 Pi 知道。
+- **token 只會在 poll 回應中明文出現一次**：伺服器回傳的同時就刪除整筆配對記錄，之後再 poll 一律得到 `expired`。伺服器只保留 PBKDF2 雜湊（與 `tools/make_device.py` 相同格式）。
+- **重複配對 = 換發**：同一 `device_id` 已存在時，待核可清單會標示 `renew`，管理頁顯示警告。核可後舊 token 立即失效，但**既有的 TCP 連線不會被中斷**（`hello` 當時已驗證通過），該裝置下次重連時才會用到新 token。
+- 配對狀態只存在伺服器記憶體（不落地），伺服器重啟時全部失效，Pi 端顯示「配對已失效，請重新配對」。
+- ⚠️ **第一次核可會建立 `devices.json`**，伺服器隨即從「單一共用 `ingest_token`」切換成「每台獨立 token」模式（見下方「存取驗證」）。原本靠共用 token 連線的裝置**下次重連時會被拒絕**，必須逐台配對或用 `tools/make_device.py` 補登記。已在連線中的裝置不受影響（`hello` 當時已驗證通過）。
+- **TLS 啟用時 Pi 配不了對**：伺服器端點照常運作，但目前 Pi 端的配對客戶端只講明文 HTTP（純標準庫，也還沒有院內 CA 憑證），連不上 HTTPS。伺服器啟動時會記一則警告，此情境的新裝置請改用 `tools/make_device.py` 手動核發。
+- `config.json` 的 `pair_enabled` 設為 `false` 時，以下所有端點都不註冊（回 404）。
+
+| 端點 | 權限 | 說明 |
+|---|---|---|
+| `POST /api/pair/request` | 免登入 | Pi 送出配對申請 |
+| `GET /api/pair/poll/{pair_id}` | 免登入 | Pi 查詢結果並領取 token |
+| `GET /api/admin/pair/pending` | admin | 待核可清單 |
+| `POST /api/admin/pair/{pair_id}/approve` | admin | 核可 |
+| `POST /api/admin/pair/{pair_id}/deny` | admin | 拒絕 |
+
+### `POST /api/pair/request`
+
+請求：`{"device_id": "raspberrypi-01", "note": "ICU 3床"}`
+`device_id` 必填，格式 `^[A-Za-z0-9._-]{1,64}$`（Pi 端預設送 hostname）；`note` 選填，上限 64 字。
+
+回應 200：
+
+```json
+{"pair_id": "9cV...（隨機字串）", "code": "123456", "expires_in": 600, "poll_interval": 3}
+```
+
+- 400 `{"error": "..."}`：JSON 格式錯誤或 `device_id` 不合格式。
+- 429 `{"error": "配對請求已達上限，請稍後再試"}`：待核可筆數已達 `pair_max_pending`。
+- 同一來源 IP 已有待核可申請時，**舊申請直接作廢**、換發新的（仍回 200），避免有人連按累積佔位。
+
+### `GET /api/pair/poll/{pair_id}`
+
+一律回 200，以 `status` 表示狀態：
+
+| status | 回應 | 意義 |
+|---|---|---|
+| `pending` | `{"status": "pending"}` | 等待管理員處理 |
+| `approved` | `{"status": "approved", "device_id": ..., "token": "...", "server_port": 8765}` | **僅出現一次**，Pi 應立刻寫入設定 |
+| `denied` | `{"status": "denied"}` | 管理員拒絕（可重複查到，直到 TTL 過期） |
+| `expired` | `{"status": "expired"}` | 逾時、已領取、`pair_id` 不存在、或伺服器重啟過 |
+
+未知 `pair_id` 與過期回應相同（不區分），避免洩漏某筆配對是否存在。
+
+### `GET /api/admin/pair/pending`
+
+```json
+{"pending": [{"pair_id": "...", "device_id": "raspberrypi-01", "code": "123456",
+              "ip": "172.19.18.55", "note": "ICU 3床", "renew": true,
+              "age_s": 42.0, "expires_in": 558.0}]}
+```
+
+`renew` 為 `true` 表示 `devices.json` 已有同名裝置，核可即換發。此端點供管理頁定期輪詢，**不寫審計日誌**。
+
+### `POST /api/admin/pair/{pair_id}/approve` / `deny`
+
+- approve 200：`{"approved": {"device_id": "...", "renew": false}}`——**token 不回傳給管理員**，只留給該台 Pi 領取。
+- deny 200：`{"denied": {"device_id": "..."}}`。
+- 404 `{"error": "配對不存在或已過期"}`；409 `{"error": "此配對已處理"}`（另一位管理員已處理）；approve 另有 500 `{"error": "devices.json 寫入失敗"}`（此時該筆維持待核可，可直接重試）。
+
+已核可但 Pi 一直沒來領取時，該筆在 TTL 後失效，但 `devices.json` 中的裝置項目會留著（無人知道其 token，形同停用）；重新配對即覆蓋換發。
+
 ## 第一段：Pi → 伺服器（TCP，每行一個 JSON，`\n` 結尾）
 
 連線後第一則必須是 `hello`，否則伺服器斷線。
 
-**存取驗證**：伺服器目錄下 `devices.json` 存在時，優先採用**每台裝置獨立 token**模式——`hello` 的 `device` 必須是該檔案中已登記且未停用的裝置，`token` 需與該裝置的雜湊相符（`tools/make_device.py` 建立/換發；外洩或懷疑外洩時只需停用/換發該台，不影響其他裝置）。`devices.json` 不存在時退回**單一共用 token** 模式：`config.json` 設定了 `ingest_token`（非空字串）時，`hello` 必須帶 `token` 欄位且值相符。兩種模式驗證失敗都是記 log 後直接斷線，且不透露失敗原因（裝置不存在／被停用／token 錯誤皆同一句訊息）；伺服器兩者皆未設定則不驗證（僅限開發環境）。裝置數達 `max_devices` 上限時，新裝置的 `hello` 一律拒絕（既有裝置重連不受影響）。未啟用 TLS 時 token 走明文 TCP，僅用於院內網隔離閒雜裝置；啟用 TLS（見「傳輸安全」）後 token 才受加密保護。
+**存取驗證**：伺服器目錄下 `devices.json` 存在時，優先採用**每台裝置獨立 token**模式——`hello` 的 `device` 必須是該檔案中已登記且未停用的裝置，`token` 需與該裝置的雜湊相符（由「裝置配對」流程核發，或 `tools/make_device.py` 手動建立/換發；外洩或懷疑外洩時只需停用/換發該台，不影響其他裝置）。`devices.json` 不存在時退回**單一共用 token** 模式：`config.json` 設定了 `ingest_token`（非空字串）時，`hello` 必須帶 `token` 欄位且值相符。兩種模式驗證失敗都是記 log 後直接斷線，且不透露失敗原因（裝置不存在／被停用／token 錯誤皆同一句訊息）；伺服器兩者皆未設定則不驗證（僅限開發環境）。裝置數達 `max_devices` 上限時，新裝置的 `hello` 一律拒絕（既有裝置重連不受影響）。未啟用 TLS 時 token 走明文 TCP，僅用於院內網隔離閒雜裝置；啟用 TLS（見「傳輸安全」）後 token 才受加密保護。
 
 **連線防護**（防範區網內異常/惡意連線耗盡資源）：同時 TCP 連線數超過 `ingest_max_conns`（預設 64）直接拒絕新連線；連線後 `ingest_hello_timeout`（預設 10 秒）內沒收到合法 `hello` 就斷線；`hello` 通過後 `ingest_idle_timeout`（預設 60 秒）內沒收到任何訊息也斷線（Pi 端本來就每 2 秒送 `ping`，此值留有充裕餘裕）。單行訊息上限 `MAX_LINE`（64KB）；`wave` 的 `p`/`f`/`v`/`trig` 需為等長數值陣列且不超過 2000 筆、`params` 的 `settings`/`measured` 鍵數不超過 200 且字串值不超過 200 字元，格式異常的訊息記 log 後直接捨棄（不斷線，視為裝置端偶發問題）。
 

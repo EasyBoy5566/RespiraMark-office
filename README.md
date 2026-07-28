@@ -22,10 +22,15 @@ python main.py              # Windows 也可直接雙擊 start_server.bat
 另開幾個終端機：
 
 ```bash
-python tools/fake_pi.py --device pi-01 --patient TEST001
-python tools/fake_pi.py --device pi-02 --patient TEST002 --rr 22
-python tools/fake_pi.py --device pi-03 --patient TEST003 --alarms   # 每次檢查預設 3% 機率觸發警報
+python tools/fake_pi.py --device fake-01 --patient TEST001
+python tools/fake_pi.py --device fake-02 --patient TEST002 --rr 22
+python tools/fake_pi.py --device fake-03 --patient TEST003 --alarms
 ```
+
+連本機 `127.0.0.1`／`localhost`、未傳 `--token` 且已有 `devices.json` 時，
+模擬器會自動登記測試裝置，為同次執行的所有模擬裝置產生一組共用臨時 token；
+檔案中只保存雜湊，不保存明文，也不會覆寫原有的正式裝置。跨機器測試不會自動登記，請先由伺服器端
+`tools/make_device.py` 建立測試裝置，再以 `--token` 傳入該次顯示的 token。
 
 儀表板即時出現對應床位卡片：三條波形 + 通氣模式 + 設定值（有警報時卡片頂端顯示紅色警報列）。**點擊卡片放大**可看所有量測值。
 
@@ -67,7 +72,10 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `web_port` | 8080 | 瀏覽器網頁 port |
 | `offline_timeout` | 5.0 | 幾秒沒資料判定 Pi 離線 |
 | `ingest_token` | （空） | 單一共用存取權杖（`devices.json` 不存在時的退回模式）；設定後 Pi 端 telemetry.json 的 `token` 必須一致才能連入。空字串 = 不驗證（僅限開發環境，**部署前務必設定**） |
-| `devices_file` | `devices.json` | 每台裝置獨立權杖檔（`tools/make_device.py` 建立，見下）；存在時優先於 `ingest_token`，**建議部署醫院前改用此模式** |
+| `devices_file` | `devices.json` | 每台裝置獨立權杖檔（配對流程或 `tools/make_device.py` 建立，見下）；存在時優先於 `ingest_token`，**建議部署醫院前改用此模式** |
+| `pair_enabled` | true | 是否開放裝置配對端點（見下「新增一台 Pi」）；false = 一律用 `tools/make_device.py` 手動核發 |
+| `pair_ttl` | 600.0 | 配對申請的有效秒數（未核可或核可後未領取皆適用） |
+| `pair_max_pending` | 5 | 同時待核可的申請數上限 |
 | `max_devices` | 16 | 裝置數上限，超過即拒絕新裝置 |
 | `ingest_max_conns` | 64 | 同時 TCP 連線數上限，超過拒絕新連線 |
 | `ingest_hello_timeout` | 10.0 | 連線後幾秒沒收到合法 hello 就斷線 |
@@ -82,7 +90,24 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 
 執行期檔案集中於 `logs/`：`server.log`、`audit.log`、`alarm_logs/alarm_history.sqlite3`、`sys_logs/sys_history.sqlite3`。警報與系統狀態都只保存本機最近 7 天且**不納入備份**；兩者皆不保存病人代碼、波形或量測值。Sys／Alarm CSV 都只在管理員下載時即時產生，伺服器端不留匯出檔。
 
-### 每台 Pi 獨立存取權杖（建議部署醫院前改用）
+### 新增一台 Pi：裝置配對（建議做法）
+
+不需要人工複製貼上 token：
+
+1. **Pi 端**：設定頁按「與伺服器配對」（若還沒填位址會先請你輸入本伺服器 IP），螢幕出現 6 位確認碼。
+2. **伺服器端**：用 admin 帳號開 `/admin`，「裝置配對申請」區塊會在幾秒內出現該台，**核對確認碼與 Pi 螢幕一致**後按「核可」。
+3. Pi 自動領取 token 寫入自己的 `telemetry.json` 並立刻開始連線——管理員全程不會看到 token。
+
+同一台重複配對即換發新 token（核可頁會顯示警告，舊 token 於該台下次重連時失效）。
+申請 10 分鐘未處理即失效，Pi 端可重新申請。沒有真機時可用
+`python tools/fake_pi.py --pair --device pi-new` 演練這個畫面。
+
+⚠️ **第一次核可會建立 `devices.json`**，伺服器隨即從「單一共用 `ingest_token`」切換成
+「每台獨立 token」模式，原本用共用 token 的舊裝置下次重連會被拒絕——請一併配對或用下面的
+`make_device.py` 補登記。另外，伺服器啟用 TLS 時 Pi 端配對客戶端連不上（只支援明文
+HTTP），該情境請走下面的手動流程。
+
+### 手動核發權杖（fallback：TLS 環境、或配對流程不可用時）
 
 ```bash
 python tools/make_device.py --device pi-icu-01 --note "ICU 3床"   # 產生新 token（只顯示一次）
@@ -151,6 +176,6 @@ CA 本身。
 
 ## 疑難排解
 
-- **儀表板一直「等待裝置連線」**：先跑 `tools/fake_pi.py` 排除伺服器問題；再從 Pi 上 `curl http://<伺服器IP>:8080` 測連通（防火牆/網段隔離最常見）
+- **儀表板一直「等待裝置連線」**：本機先跑 `tools/fake_pi.py` 排除伺服器問題；再從 Pi 上 `curl http://<伺服器IP>:8080` 測連通（防火牆/網段隔離最常見）
 - **波形卡頓**：正常顯示會落後真實時間約 0.5 秒（抖動緩衝）；持續卡頓多半是 Wi-Fi 訊號差
 - **此畫面僅供觀察參考，不可作為臨床警報依據**

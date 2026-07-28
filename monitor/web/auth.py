@@ -34,8 +34,14 @@ from monitor.crypto import hash_password, verify_password
 COOKIE_NAME = "rm_session"
 
 # 不需登入即可存取的路徑（登入頁本身與靜態資源；資料端點一律受保護）
+#
+# /api/pair/ 是裝置配對用（PROTOCOL.md「裝置配對」）：Pi 上沒有人可以登入，
+# 所以這兩個端點必須免登入。它們不會洩漏任何資料——申請只能得到一組隨機
+# pair_id，要拿到 token 得由管理員在 /admin 核對 6 位確認碼後核可；查詢用的
+# pair_id 是高熵隨機字串，猜不到的一律回 expired。核可端點在
+# /api/admin/pair/*，走下面的 ADMIN_API_PREFIX 保護。
 PUBLIC_PATHS = {"/login", "/healthz"}
-PUBLIC_PREFIXES = ("/static/",)
+PUBLIC_PREFIXES = ("/static/", "/api/pair/")
 
 # 只有 admin 角色能進的路徑（管理頁與其 API，見 PROTOCOL.md「管理頁」）
 ADMIN_PAGES = {"/admin"}

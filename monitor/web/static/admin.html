@@ -34,6 +34,21 @@
       </p>
     </section>
 
+    <section id="pairSection" class="hidden">
+      <h2>裝置配對申請</h2>
+      <div id="pairEmpty" class="admin-empty">目前沒有待核可的配對申請</div>
+      <div id="pairList" class="pair-list"></div>
+      <p class="admin-hint">
+        新的 Pi 在設定頁輸入本伺服器位址並按「配對」後會出現在這裡。
+        核可前請先確認 Pi 螢幕上顯示的 6 位確認碼與這裡一致——確認碼是用來
+        辨認「網頁上這筆就是我手上那台機器」的，不一致代表是別台裝置送出的申請。
+        核可後 token 由該台 Pi 自動領取寫入，管理員不需要也看不到 token。
+        申請 10 分鐘內未處理即失效，Pi 端可重新申請。
+        注意：本伺服器第一次核可配對後，所有裝置都改為逐台驗證，原本共用同一組
+        權杖的舊裝置下次重連會被拒絕，需一併配對或用 tools/make_device.py 補登記。
+      </p>
+    </section>
+
     <section>
       <h2>帳號清單</h2>
       <div class="acc-card">

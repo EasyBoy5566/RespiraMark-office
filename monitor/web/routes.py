@@ -17,6 +17,7 @@ from aiohttp import web, WSMsgType
 
 from monitor.audit import audit
 from monitor.version import VERSION
+from monitor.web import pairing_api
 from monitor.web.auth import auth_middleware
 from monitor.web.security_headers import security_headers_middleware
 
@@ -181,7 +182,7 @@ async def _ws_sender(ws, q: asyncio.Queue):
         pass
 
 
-def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
+def create_app(hub, authmgr=None, tls_enabled=False, pairing=None) -> web.Application:
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     # security_headers 排最外層：auth_middleware 的 401/403/redirect 多半是
     # raise HTTPException 而非 return，要包在外面才能連這些回應也補上標頭
@@ -189,6 +190,7 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     app["hub"] = hub
     app["authmgr"] = authmgr                     # None = 登入未啟用（開發模式）
     app["tls_enabled"] = tls_enabled
+    app["pairing"] = pairing                     # None = 裝置配對未啟用
     app["start_time"] = time.time()
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/", index)
@@ -200,6 +202,8 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     app.router.add_delete("/api/admin/devices/{device}", admin_remove_device)
     app.router.add_get("/api/admin/syslog/{device}", admin_syslog)
     app.router.add_get("/api/admin/alarmlog/{device}", admin_alarmlog)
+    if pairing is not None:                      # 未啟用時端點根本不存在（404）
+        pairing_api.add_routes(app.router)
     if authmgr is not None:
         app.router.add_get("/login", authmgr.login_page)
         app.router.add_post("/login", authmgr.login_post)
@@ -213,9 +217,10 @@ def create_app(hub, authmgr=None, tls_enabled=False) -> web.Application:
     return app
 
 
-async def start_web(hub, port: int, ssl_ctx=None, authmgr=None):
+async def start_web(hub, port: int, ssl_ctx=None, authmgr=None, pairing=None):
     """啟動網頁伺服器（ssl_ctx 非 None 時為 HTTPS/WSS），回傳 runner"""
-    runner = web.AppRunner(create_app(hub, authmgr, tls_enabled=ssl_ctx is not None))
+    runner = web.AppRunner(create_app(hub, authmgr, tls_enabled=ssl_ctx is not None,
+                                      pairing=pairing))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port, ssl_context=ssl_ctx).start()
     return runner

@@ -23,6 +23,7 @@ from logging.handlers import RotatingFileHandler
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.hub import TelemetryHub
+from monitor.domain.pairing import PairingService
 from monitor.transport.device_auth import DeviceRegistry
 from monitor.transport.ingest import start_ingest
 from monitor.web.auth import AuthManager, LocalAuthenticator
@@ -142,7 +143,7 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
-def print_banner(cfg: dict, tls_on: bool, auth_on: bool):
+def print_banner(cfg: dict, tls_on: bool, auth_on: bool, pair_on: bool = False):
     ip = lan_ip()
     scheme = "https" if tls_on else "http"
     print()
@@ -150,7 +151,8 @@ def print_banner(cfg: dict, tls_on: bool, auth_on: bool):
     print("  RespiraMark Office 彙整伺服器已啟動")
     print(f"  儀表板（本機）:   {scheme}://localhost:{cfg['web_port']}")
     print(f"  儀表板（區網）:   {scheme}://{ip}:{cfg['web_port']}")
-    print(f"  Pi 端 telemetry.json 的 server_host 請填: {ip}")
+    print(f"  Pi 端請在設定頁填入伺服器位址: {ip}"
+          + ("（按「配對」申請，再到 /admin 核可）" if pair_on else ""))
     # 注意：只用 cp950 可編碼的字元（Windows 輸出重導向到檔案時非 UTF-8）
     print(f"  Pi 資料接收 port: {cfg['ingest_port']}"
           + ("（TLS 加密，Pi 端需設 tls: true）" if tls_on else ""))
@@ -185,14 +187,30 @@ async def main():
     authmgr = build_auth_manager(cfg, tls_on=ssl_ctx is not None)
 
     # 裝置權杖：devices.json 存在則每台獨立驗證，否則退回單一 ingest_token（向後相容）
-    devices = DeviceRegistry(_resolve(str(cfg.get("devices_file") or "devices.json")))
+    devices_path = _resolve(str(cfg.get("devices_file") or "devices.json"))
+    devices = DeviceRegistry(devices_path)
     log = logging.getLogger("main")
     if devices.exists():
         log.info(f"裝置權杖模式：每台獨立（devices.json，共 {len(devices.list_devices())} 台）")
     elif cfg.get("ingest_token"):
-        log.info("裝置權杖模式：單一共用 ingest_token（建議改用 tools/make_device.py 逐台核發）")
+        log.info("裝置權杖模式：單一共用 ingest_token（建議改用配對流程或 tools/make_device.py 逐台核發）")
     else:
         log.warning("裝置權杖模式：未設定（僅限開發環境，任何裝置皆可連入）")
+
+    # 裝置配對（讀 devices.json 的是上面的 DeviceRegistry，寫入的是這裡；見 PROTOCOL.md）
+    pairing = None
+    if cfg.get("pair_enabled", True):
+        pairing = PairingService(devices_path, int(cfg["ingest_port"]),
+                                 ttl=float(cfg["pair_ttl"]),
+                                 max_pending=int(cfg["pair_max_pending"]))
+        log.info(f"裝置配對已啟用：Pi 可在 :{cfg['web_port']} 申請，於 /admin 核可")
+        if not devices.exists() and cfg.get("ingest_token"):
+            log.warning("目前是單一共用 ingest_token 模式：第一次核可配對會建立 devices.json "
+                        "並切換成每台獨立驗證，屆時未登記的舊裝置重連會被拒絕")
+        if ssl_ctx is not None:
+            # 目前 Pi 端配對客戶端只講明文 HTTP（純標準庫，手上也還沒有院內 CA 憑證）
+            log.warning("TLS 已啟用：Pi 端配對客戶端連不上 HTTPS，新裝置請改用 "
+                        "tools/make_device.py 手動核發")
 
     # 組裝三層
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),
@@ -212,11 +230,12 @@ async def main():
                                        idle_timeout=float(cfg["ingest_idle_timeout"]),
                                        devices=devices)
     web_runner = await start_web(hub, int(cfg["web_port"]),
-                                 ssl_ctx=ssl_ctx, authmgr=authmgr)
+                                 ssl_ctx=ssl_ctx, authmgr=authmgr, pairing=pairing)
     watchdog = asyncio.ensure_future(hub.watchdog())
     auth_watchdog = asyncio.ensure_future(authmgr.watchdog()) if authmgr else None
 
-    print_banner(cfg, tls_on=ssl_ctx is not None, auth_on=authmgr is not None)
+    print_banner(cfg, tls_on=ssl_ctx is not None, auth_on=authmgr is not None,
+                 pair_on=pairing is not None)
     try:
         await asyncio.Event().wait()           # 永久運行，Ctrl+C 結束
     finally:

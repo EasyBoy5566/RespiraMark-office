@@ -2,31 +2,50 @@
 fake_pi — 模擬一台 Pi 推送擬真呼吸波形（開發測試用，純標準庫）
 ================================================================
 用法：
-    python fake_pi.py                                   # 預設 pi-01 / TEST001 → 127.0.0.1
-    python fake_pi.py --device pi-02 --patient A123456
+    python fake_pi.py                                   # 本機自動登記 pi-01 並連線
+    python fake_pi.py --device fake-02 --patient TEST002
     python fake_pi.py --number 20                       # 一個指令開 20 台（pi-01..pi-20）
-    python fake_pi.py --device test-01 -n 20 --alarms   # test-01..test-20，每次檢查 3% 機率觸發
+    python fake_pi.py --device test-01 -n 20 --alarms
     python fake_pi.py --host 192.168.0.50               # 跨機器測試（在真 Pi 上也能跑）
+    python fake_pi.py --pair --device pi-new            # 模擬配對申請（演練 /admin 核可畫面）
 
 --number/-n 大於 1 時，會依 --device / --patient 尾碼自動編號同時開多台（各一條執行緒）。
 不想用 --number 也可以自己多開幾個不同 --device 的行程。Ctrl+C 全部結束。
+
+連本機、未傳 --token 且伺服器已有 devices.json 時，模擬器會自動為本次執行產生
+一組共用臨時 token，將雜湊寫入 devices.json 後立即連線，明文不落地。此自動流程只適用
+127.0.0.1/::1/localhost，且不會覆寫不是由 fake_pi 建立的既有裝置。
 """
 
 import argparse
 import copy
+import ipaddress
 import json
 import math
+import os
 import random
 import re
+import secrets
 import socket
 import ssl
+import sys
 import threading
 import time
+import urllib.error
+import urllib.request
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
+from monitor.crypto import hash_password  # noqa: E402
 
 SAMPLE_RATE = 100        # Hz，與 Pi 端實際波形速率同量級
 FLUSH_INTERVAL = 0.15    # 秒，打包間隔（與 telemetry_client 相同）
 PARAMS_INTERVAL = 5.0    # 秒，慢數據間隔
 SYS_INTERVAL = 5.0       # 秒，系統狀態間隔（與 telemetry_client 相同）
+DEFAULT_DEVICES_FILE = os.path.join(PROJECT_ROOT, "devices.json")
+AUTO_REGISTER_NOTE = "fake_pi 本機自動註冊"
+TOKEN_BYTES = 24
 
 ALARM_POOL = (
     {"prio": 28, "code": "10", "cp": 1, "text": "PAW HIGH"},
@@ -255,6 +274,143 @@ def build_device_args(args):
     return out
 
 
+def _is_loopback_host(host):
+    """--register-local 只能改本機伺服器的權杖檔，禁止拿來連遠端主機。"""
+    host = str(host or "").strip().lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def register_local_devices(device_args, devices_file):
+    """為本次本機 fake_pi 建立一組共用臨時 token，並寫回各裝置 args。
+
+    devices.json 只保存 PBKDF2 雜湊；明文 token 僅存在本次程序記憶體。
+    為避免誤換正式 Pi 權杖，既有項目只有帶 AUTO_REGISTER_NOTE 才能覆寫。
+    模擬裝置不需要正式 Pi 的逐台權杖隔離，因此整批只計算一次昂貴的
+    PBKDF2 雜湊，避免啟動 20 台時重複計算 20 次。
+    """
+    if not device_args or any(not _is_loopback_host(da.host) for da in device_args):
+        raise ValueError("--register-local 只允許 --host 127.0.0.1、::1 或 localhost")
+    if not os.path.isfile(devices_file):
+        raise ValueError(
+            f"找不到裝置權杖檔 {devices_file}；"
+            "此選項不會自行開啟 devices.json 模式")
+
+    try:
+        with open(devices_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ValueError(f"無法讀取裝置權杖檔 {devices_file}: {e}") from e
+
+    devices = data.get("devices")
+    if not isinstance(devices, list):
+        raise ValueError(f"裝置權杖檔格式錯誤：{devices_file} 缺少 devices 陣列")
+
+    by_id = {d.get("device_id"): (i, d) for i, d in enumerate(devices)
+             if isinstance(d, dict)}
+    conflicts = []
+    for da in device_args:
+        found = by_id.get(da.device)
+        if found is not None and found[1].get("note") != AUTO_REGISTER_NOTE:
+            conflicts.append(da.device)
+    if conflicts:
+        names = ", ".join(conflicts)
+        raise ValueError(
+            f"拒絕覆寫既有裝置 {names}；請改用 fake-/test- 開頭的新 ID，"
+            "或使用該裝置原有的 --token")
+
+    token = secrets.token_urlsafe(TOKEN_BYTES)
+    token_hash = hash_password(token)
+    for da in device_args:
+        entry = {
+            "device_id": da.device,
+            "note": AUTO_REGISTER_NOTE,
+            "enabled": True,
+            "token_hash": token_hash,
+        }
+        found = by_id.get(da.device)
+        if found is None:
+            devices.append(entry)
+        else:
+            devices[found[0]] = entry
+
+    try:
+        with open(devices_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        raise ValueError(f"無法寫入裝置權杖檔 {devices_file}: {e}") from e
+
+    for da in device_args:
+        da.token = token
+
+
+def should_register_local(args):
+    """本機已有 devices.json 且未手動給 token 時，自動準備測試裝置權杖。"""
+    return bool(
+        args.register_local
+        or (not args.token
+            and _is_loopback_host(args.host)
+            and os.path.isfile(args.devices_file))
+    )
+
+
+def run_pairing(host: str, web_port: int, device: str):
+    """模擬 Pi 端的配對申請，讓開發者不用真機也能演練 /admin 的核可畫面。
+
+    刻意不共用 respiramark-pi 的 pairing.py（兩個專案彼此獨立，唯一的耦合是
+    PROTOCOL.md）；這裡只是最精簡的協議實作，不含 Pi 端的重試與狀態機。
+    """
+    base = f"http://{host}:{web_port}"
+
+    def call(path, payload=None):
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            base + path, data=data, method="POST" if data else "GET",
+            headers={"Content-Type": "application/json"} if data else {})
+        with urllib.request.urlopen(req, timeout=5.0) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    try:
+        pair = call("/api/pair/request", {"device_id": device, "note": "fake_pi 模擬配對"})
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"配對申請失敗（伺服器未啟動或未開放配對？）: {e}")
+        sys.exit(1)
+
+    print(f"已送出配對申請：{device}")
+    print(f"  確認碼：{pair['code']}   （請到 {base}/admin 核對並核可）")
+    print("  等待管理員處理…（Ctrl+C 取消）")
+
+    deadline = time.time() + float(pair.get("expires_in") or 600)
+    while time.time() < deadline:
+        time.sleep(float(pair.get("poll_interval") or 3))
+        try:
+            body = call(f"/api/pair/poll/{pair['pair_id']}")
+        except (urllib.error.URLError, OSError, ValueError):
+            continue                      # 短暫網路問題 → 下一輪再試
+        status = body.get("status")
+        if status == "approved":
+            print("\n配對成功！真正的 Pi 會把這些自動寫進自己的 telemetry.json：")
+            print(f'  "device_id": "{body["device_id"]}"')
+            print(f'  "server_port": {body["server_port"]}')
+            print(f'  "token": "{body["token"]}"')
+            print("\n接著可以用它連線送波形：")
+            print(f"  python tools/fake_pi.py --device {body['device_id']} "
+                  f"--token {body['token']} --host {host}")
+            return
+        if status == "denied":
+            print("\n管理員拒絕了這次配對申請")
+            return
+        if status == "expired":
+            print("\n配對已失效（逾時或伺服器重啟），請重新申請")
+            return
+    print("\n配對逾時")
+
+
 def main():
     ap = argparse.ArgumentParser(description="模擬一台或多台 Pi 推送呼吸波形")
     ap.add_argument("--device", default="pi-01")
@@ -265,7 +421,11 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--rr", type=float, default=15.0, help="呼吸頻率 (預設 15；多床時各床會微幅錯開)")
     ap.add_argument("--token", default="",
-                    help="hello 的存取權杖（伺服器 config.json 有設 ingest_token 時必填）")
+                    help="hello 的存取權杖（共用或該 --device 的獨立 token）")
+    ap.add_argument("--register-local", action="store_true",
+                    help="明確啟用本機測試裝置註冊；一般本機 devices.json 模式會自動啟用")
+    ap.add_argument("--devices-file", default=DEFAULT_DEVICES_FILE,
+                    help="--register-local 寫入的裝置權杖檔（預設：專案根目錄 devices.json）")
     ap.add_argument("--alarms", action="store_true",
                     help="模擬警報：每次檢查依機率觸發，警報種類隨機（開發警報 UI 用）")
     ap.add_argument("--alarm-probability", type=float, default=0.03,
@@ -280,7 +440,16 @@ def main():
                     help="模擬 Pi 過熱高載：溫度/CPU 偏高且降頻旗標非 0（測系統狀態示警配色用）")
     ap.add_argument("--tls-ca", default="",
                     help="TLS 連線：伺服器自建 CA 憑證（ca.pem）路徑；省略 = 明文")
+    ap.add_argument("--pair", action="store_true",
+                    help="不送波形，改走裝置配對流程：申請 → 顯示確認碼 → 等管理員在 "
+                         "/admin 核可 → 印出領到的 token（供演練配對 UI）")
+    ap.add_argument("--web-port", type=int, default=8080,
+                    help="--pair 用的網頁 port（伺服器 config.json 的 web_port）")
     args = ap.parse_args()
+
+    if args.pair:
+        run_pairing(args.host, args.web_port, args.device)
+        return
 
     if (not math.isfinite(args.alarm_interval_min)
             or not math.isfinite(args.alarm_interval_max)
@@ -290,17 +459,29 @@ def main():
     if (not math.isfinite(args.alarm_probability)
             or not 0.0 <= args.alarm_probability <= 1.0):
         ap.error("--alarm-probability 必須介於 0 與 1 之間")
+    if args.number < 1:
+        ap.error("--number 必須至少為 1")
+    if args.register_local and args.token:
+        ap.error("--register-local 與 --token 不能同時使用")
+
+    dev_args = build_device_args(args) if args.number > 1 else [args]
+    if should_register_local(args):
+        try:
+            register_local_devices(dev_args, args.devices_file)
+        except ValueError as e:
+            ap.error(str(e))
+        print(f"已為 {len(dev_args)} 台本機模擬裝置建立共用的本次臨時權杖"
+              "（devices.json 僅保存雜湊）")
 
     # 單台：直接在主執行緒跑，Ctrl+C 立即結束（行為與原本相同）
     if args.number <= 1:
         try:
-            run_device(args)
+            run_device(dev_args[0])
         except KeyboardInterrupt:
             print(f"\n[{args.device}] 結束")
         return
 
     # 多台：每台一條 daemon 執行緒，Ctrl+C 由主執行緒統一收尾
-    dev_args = build_device_args(args)
     for da in dev_args:
         threading.Thread(target=run_device, args=(da,), daemon=True).start()
         time.sleep(0.05)   # 錯開連線與波形相位，避免同時湧入

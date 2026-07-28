@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 未發布 — 裝置配對
+
+- 新增裝置配對流程，取代「在伺服器產 token 再手動貼到 Pi」：Pi 送出申請 → 管理員在
+  `/admin` 核對 6 位確認碼後核可 → Pi 自動領取 token 寫入自己的 `telemetry.json`。
+  管理員全程不會看到 token（`tools/make_device.py` 保留為 fallback）
+- 走 HTTP `:8080` 的 `/api/pair/*`（Pi，免登入）與 `/api/admin/pair/*`（admin）；
+  TCP 8765 的 ingest 協議完全不動
+- token 在 poll 回應中只出現一次，回傳同時銷毀整筆配對；待核可資料只存記憶體，
+  伺服器重啟即失效。TTL 10 分鐘、同時待核可上限 5 筆、同一來源 IP 只留最新一筆
+- 重複配對視為換發，核可頁顯示警告並要求二次確認；審計記錄 `pair_requested`／
+  `pair_approved`／`pair_claimed`／`pair_denied`，一律不含 token
+- `devices.json` 讀寫分離：驗證（讀）仍在 `transport/device_auth.py`，寫入改由新的
+  `domain/pairing.py` 以 tmp + fsync + os.replace 原子寫入
+- 新增設定 `pair_enabled`／`pair_ttl`／`pair_max_pending`；TLS 啟用時 Pi 端配對客戶端
+  連不上（只支援明文 HTTP），伺服器啟動時記警告並導向手動核發
+- `tools/fake_pi.py --pair` 可在沒有真機時演練管理頁的核可畫面
+
 ## 未發布 — 單床詳細監測工作台
 
 - 全部執行期日誌集中到 `logs/`；警報 DB 位於 `logs/alarm_logs/alarm_history.sqlite3`，
@@ -28,6 +45,9 @@
 - 警報音試聽頁改為純合成音調音工具，可分別試聽三個等級且不需音檔
 - `fake_pi --alarms` 改為無作用中警報時每次檢查只有 3% 機率觸發，避免一次模擬 20 台時
   持續充滿警報聲；可用 `--alarm-probability` 調整，`--alarm-immediate` 仍供測試強制首發
+- `fake_pi` 在本機 `devices.json` 模式會自動安全登記測試裝置；同次執行的模擬裝置
+  共用一組臨時 token，只計算一次 PBKDF2 雜湊以加快多台啟動。明文不落地，也不允許
+  覆寫既有正式裝置，修正預設模擬器遭權杖驗證拒絕的問題
 
 ## v1.2.0 — 警報音改為呼吸器警報專用、移除離線提示音、ldaps 憑證驗證（2026-07-17）
 

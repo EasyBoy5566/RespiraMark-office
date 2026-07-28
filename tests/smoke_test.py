@@ -6,7 +6,8 @@ smoke_test — push 前必跑的端對端冒煙測試（開發 SOP，見 CLAUDE.
 測試專用 port）→ 跑三台 fake_pi（TLS）→ 模擬瀏覽器登入後連 /ws 驗證
 snapshot 與即時廣播 → 驗證未登入/錯誤密碼/錯誤 token 都被拒 → 管理頁
 權限（viewer 擋、admin 通）、帳號清單、CSV 下載、移除離線裝置與
-device_removed 廣播 → 全部關閉。
+device_removed 廣播 → 裝置配對全流程（申請→核可→一次性領取→用領到的
+token 通過 ingest 驗證）→ 全部關閉。
 
 用法：
     python tests/smoke_test.py
@@ -63,6 +64,9 @@ except ImportError:
 FAILURES = []
 CLIENT_SSL = None        # 信任測試 CA 的 client context（main() 產憑證後建立）
 SMOKE3_PROC = None       # 第三台 fake_pi：移除離線裝置測試會先關掉它
+DEVICES_FILE = os.path.join(TMP, f"respiramark_smoke_devices_{os.getpid()}.json")
+PAIR_DEVICE = "SMOKE-PAIR-01"
+PAIRED_TOKEN = ""        # 配對測試領到的 token（用於「audit 不含明碼」反向檢查）
 
 
 def check(name, cond, detail=""):
@@ -113,6 +117,26 @@ async def check_bad_token():
         closed = False                    # 3 秒沒斷線 = 驗證沒生效
     writer.close()
     return closed
+
+
+async def check_paired_token_accepted(device: str, token: str):
+    """用配對核發的 token 送 hello 應被接受（沒被斷線 = 通過裝置驗證）"""
+    try:
+        reader, writer = await asyncio.open_connection(
+            "localhost", INGEST_PORT, ssl=CLIENT_SSL)
+    except (OSError, ssl.SSLError):
+        return False
+    line = json.dumps({"type": "hello", "v": 1, "device": device,
+                       "patient": "SMOKEPAIR", "token": token}) + "\n"
+    writer.write(line.encode("utf-8"))
+    await writer.drain()
+    try:
+        data = await asyncio.wait_for(reader.read(1), timeout=2.0)
+        accepted = data != b""            # EOF = 被拒絕斷線
+    except asyncio.TimeoutError:
+        accepted = True                   # 沒有回應也沒斷線 = 已接受（協議本來就單向）
+    writer.close()
+    return accepted
 
 
 async def check_hello_timeout():
@@ -519,6 +543,95 @@ async def run_checks():
     async with authed.get(f"{BASE}/api/admin/alarmlog/smoke-01") as r:
         check("未曾發生警報的裝置下載回 404（smoke-01 全程無警報）", r.status == 404)
 
+    # ── 裝置配對（PROTOCOL.md「裝置配對」）──────────────────────────
+    # 刻意排在最後：核可會建立 devices.json，伺服器隨即從「共用 ingest_token」
+    # 切換成「每台獨立 token」模式，前面用共用 token 的檢查必須先跑完。
+    global PAIRED_TOKEN
+    async with new_session() as s:
+        async with s.get(f"{BASE}/api/admin/pair/pending") as r:
+            check("未登入查待核可清單回 401", r.status == 401)
+        async with s.post(f"{BASE}/api/pair/request",
+                          json={"device_id": "bad id!"}) as r:
+            check("device_id 格式錯誤回 400", r.status == 400)
+        async with s.post(f"{BASE}/api/pair/request",
+                          json={"device_id": PAIR_DEVICE, "note": "冒煙測試"}) as r:
+            pair = await r.json() if r.status == 200 else {}
+            check("Pi 免登入即可送出配對申請",
+                  r.status == 200 and len(pair.get("code", "")) == 6
+                  and pair.get("code", "").isdigit() and bool(pair.get("pair_id")),
+                  str(pair)[:80])
+        pair_id = pair.get("pair_id", "")
+        async with s.get(f"{BASE}/api/pair/poll/{pair_id}") as r:
+            body = await r.json() if r.status == 200 else {}
+            check("核可前輪詢為 pending", body.get("status") == "pending", str(body))
+        async with s.get(f"{BASE}/api/pair/poll/no-such-pair-id") as r:
+            body = await r.json() if r.status == 200 else {}
+            check("未知 pair_id 與逾時回應相同（不洩漏存在性）",
+                  body == {"status": "expired"}, str(body))
+
+    viewer2 = new_session()
+    async with viewer2.post(f"{BASE}/login", data={
+            "username": VIEWER_USER, "password": VIEWER_PASS}) as r:
+        pass
+    async with viewer2.get(f"{BASE}/api/admin/pair/pending") as r:
+        check("viewer 查待核可清單回 403", r.status == 403)
+    await viewer2.close()
+
+    async with authed.get(f"{BASE}/api/admin/pair/pending") as r:
+        data = await r.json() if r.status == 200 else {}
+        items = data.get("pending") or []
+        mine = [p for p in items if p.get("device_id") == PAIR_DEVICE]
+        check("admin 看得到待核可申請且清單不含 token",
+              r.status == 200 and len(mine) == 1
+              and mine[0].get("code") == pair.get("code")
+              and "token" not in json.dumps(items), str(items)[:120])
+        check("首次配對標示為新增（非換發）", bool(mine) and mine[0].get("renew") is False)
+
+    async with authed.post(f"{BASE}/api/admin/pair/{pair_id}/approve") as r:
+        body = await r.json() if r.status == 200 else {}
+        check("admin 核可配對",
+              r.status == 200 and body.get("approved", {}).get("device_id") == PAIR_DEVICE,
+              str(body)[:80])
+        check("核可回應不含 token（只有該台 Pi 領得到）", "token" not in json.dumps(body))
+    async with authed.post(f"{BASE}/api/admin/pair/{pair_id}/approve") as r:
+        check("重複核可回 409", r.status == 409)
+
+    async with new_session() as s:
+        async with s.get(f"{BASE}/api/pair/poll/{pair_id}") as r:
+            body = await r.json() if r.status == 200 else {}
+            PAIRED_TOKEN = body.get("token") or ""
+            check("Pi 領到 token 與 ingest port",
+                  body.get("status") == "approved" and len(PAIRED_TOKEN) > 20
+                  and body.get("server_port") == INGEST_PORT, str(body.get("status")))
+        async with s.get(f"{BASE}/api/pair/poll/{pair_id}") as r:
+            body = await r.json() if r.status == 200 else {}
+            check("token 只能領一次（再查為 expired）",
+                  body.get("status") == "expired", str(body))
+    async with authed.get(f"{BASE}/api/admin/pair/pending") as r:
+        data = await r.json() if r.status == 200 else {}
+        check("處理完的申請從待核可清單消失",
+              not any(p.get("device_id") == PAIR_DEVICE
+                      for p in data.get("pending") or []))
+
+    check("配對核發的 token 可通過 ingest 驗證",
+          await check_paired_token_accepted(PAIR_DEVICE, PAIRED_TOKEN))
+    check("配對核發的 token 是逐台獨立（別台冒用會被拒）",
+          not await check_paired_token_accepted("smoke-01", PAIRED_TOKEN))
+
+    # 拒絕流程：Pi 端要查得到「被拒絕」，而不是傻等到逾時
+    async with new_session() as s:
+        async with s.post(f"{BASE}/api/pair/request",
+                          json={"device_id": PAIR_DEVICE + "-B"}) as r:
+            pair_b = await r.json() if r.status == 200 else {}
+    async with authed.post(f"{BASE}/api/admin/pair/{pair_b.get('pair_id', '')}/deny") as r:
+        check("admin 拒絕配對", r.status == 200)
+    async with new_session() as s:
+        async with s.get(f"{BASE}/api/pair/poll/{pair_b.get('pair_id', '')}") as r:
+            body = await r.json() if r.status == 200 else {}
+            check("被拒絕的申請查得到 denied", body.get("status") == "denied", str(body))
+    async with authed.post(f"{BASE}/api/admin/pair/no-such-pair-id/approve") as r:
+        check("核可未知 pair_id 回 404", r.status == 404)
+
     # ── 登出 ────────────────────────────────────────────────────────
     async with authed.post(f"{BASE}/logout") as r:
         check("登出導回登入頁", r.url.path == "/login")
@@ -534,12 +647,15 @@ async def run_checks():
             audit_text = f.read()
     for ev in ("login_ok", "login_fail", "logout", "device_online",
                "device_offline", "admin_view_accounts", "admin_download_syslog",
-               "admin_remove_device", "device_removed", "device_reject"):
+               "admin_remove_device", "device_removed", "device_reject",
+               "pair_requested", "pair_approved", "pair_claimed", "pair_denied"):
         check(f"audit.log 含事件 {ev}", ev in audit_text)
     check("audit.log 不含病人代碼",
           not any(p in audit_text for p in ("SMOKE001", "SMOKE002", "SMOKE003")))
     check("audit.log 不含密碼/token 明碼",
           not any(s in audit_text for s in (ADMIN_PASS, VIEWER_PASS, TOKEN)))
+    check("audit.log 不含配對核發的 token 明碼",
+          bool(PAIRED_TOKEN) and PAIRED_TOKEN not in audit_text)
 
 
 def prepare_certs_and_accounts(log_file) -> bool:
@@ -576,6 +692,10 @@ def main():
                 os.remove(db_path + suffix)
             except OSError:
                 pass
+    try:
+        os.remove(DEVICES_FILE)           # 配對測試會建出這個檔，每次重來
+    except OSError:
+        pass
 
     log_path = os.path.join(TMP, "respiramark_smoke_server.log")
     log_file = open(log_path, "w", encoding="utf-8")
@@ -593,6 +713,11 @@ def main():
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump({"ingest_port": INGEST_PORT, "web_port": WEB_PORT,
                    "offline_timeout": 5.0, "ingest_token": TOKEN,
+                   # 指向暫存路徑（測試開始時不存在）：前段強制走測試用共用
+                   # token，避免開發機既有 devices.json 汙染冒煙測試並誤拒
+                   # smoke-01..03；最後段的配對測試才會把這個檔案建出來。
+                   "devices_file": DEVICES_FILE,
+                   "pair_enabled": True, "pair_ttl": 600.0, "pair_max_pending": 5,
                    "ingest_max_conns": MAX_CONNS,
                    "ingest_hello_timeout": HELLO_TIMEOUT,
                    "ingest_idle_timeout": IDLE_TIMEOUT,
@@ -639,6 +764,10 @@ def main():
             except subprocess.TimeoutExpired:
                 p.kill()
         log_file.close()
+        try:
+            os.remove(DEVICES_FILE)       # 不留測試裝置權杖在暫存目錄
+        except OSError:
+            pass
 
     print()
     if FAILURES:
