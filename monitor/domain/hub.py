@@ -49,8 +49,10 @@ class TelemetryHub:
                  sys_persist_interval: float = 60.0, sys_retention_days: int = 7,
                  max_viewers: int = 50,
                  alarm_db_path: str = "", alarm_retention_days: int = 7,
-                 alarm_log_dir: str = None):
+                 alarm_log_dir: str = None, directory=None):
         self.log = logging.getLogger("hub")
+        # 裝置清冊（床號／財編）；None = 未提供，snapshot 一律回空字串
+        self.directory = directory
         self.offline_timeout = offline_timeout
         self.max_devices = max_devices
         self.max_viewers = max_viewers
@@ -199,13 +201,33 @@ class TelemetryHub:
 
     def snapshot(self) -> dict:
         """新瀏覽器連上時的完整狀態（波形不補：幾秒內就會填滿）"""
+        # 清冊一次讀完再套到每台，避免每台各開一次檔
+        metas = self.directory.all_meta() if self.directory else {}
         devs = []
         for st in self.devices.values():
+            meta = metas.get(st.device) or {}
             d = {"device": st.device, "patient": st.patient,
-                 "online": st.online, "v": st.proto}
+                 "online": st.online, "v": st.proto,
+                 "bed": meta.get("bed", ""), "asset": meta.get("asset", "")}
             d.update(st.latest)          # 各 STATEFUL_TYPES 的最新一則
             devs.append(d)
         return {"type": "snapshot", "devices": devs}
+
+    def set_device_meta(self, device: str, bed=None, asset=None):
+        """管理頁設定床號／財編（PROTOCOL.md「裝置床號與財編」）。
+
+        回傳 DeviceDirectory.set_meta 的 (result, data)；成功時廣播
+        device_meta，讓所有看板即時換標題與重新排序，不需重新整理。
+        注意這裡是對「清冊」設定，裝置不必在線上（也不必曾經連過）。
+        """
+        if self.directory is None:
+            return "no_registry", None
+        result, data = self.directory.set_meta(device, bed=bed, asset=asset)
+        if result == "ok":
+            self.log.info(f"裝置清冊更新: {device}")
+            self.broadcast({"type": "device_meta", "device": device,
+                            "bed": data["bed"], "asset": data["asset"]})
+        return result, data
 
     def add_viewer(self):
         """新增一個觀看端佇列；超過 max_viewers 上限回傳 None（拒絕新連線，

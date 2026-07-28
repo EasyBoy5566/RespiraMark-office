@@ -5,7 +5,7 @@
  * - 繪圖：每幀把消耗的樣本合成單一路徑繪製（增量 + 擦除條）；
  *   放大/縮回/換主題時從歷史重播並接續原掃描位置（不從左端重畫）
  * - 小卡片：三條波形（統一單色）+ 設定值；警報以半透明橫幅疊在最上方(Paw)波形上（最嚴重一則＋其餘計數）；點開顯示完整警報清單與所有量測值
- * - 連線狀態（呼吸器/伺服器）移到管理頁 /admin 顯示；本頁 Pi 離線以紅框呈現
+ * - 連線狀態（呼吸器/伺服器）移到管理頁 /admin 顯示；本頁 Pi 離線時保留空卡、不顯示過期資料
  * - 警報音：呼吸器發出 level 1/2/3 警報時播放 Web Audio 合成音；右上角靜音鈕按一次靜音 2 分鐘
  * - 主題：深色 / 淺色 / 監視器(mono，近純黑 CMS 風格)三選一；顏色一律讀 style.css 的 CSS 變數，切換時從歷史重播波形
  * - 登入顯示在 auth.js；Pi 機器健康狀態只在管理頁（/admin）顯示，本頁忽略 sys
@@ -216,7 +216,7 @@ function updateMuteBtn(dev) {
 
 // 取所有「線上、未靜音、有警報」裝置中最嚴重、同級優先值最高的警報鳴響；
 // 每段合成音完整播放後靜音 2.5 秒，屆時警報仍存在才重播。
-// Pi 離線後警報資料已不可信，不列入鳴響（畫面仍以離線紅框提示）。
+// Pi 離線後警報資料已不可信，不列入鳴響。
 setInterval(() => {
   let selected = null;
   for (const dev of devices.values()) {
@@ -262,6 +262,8 @@ function ensureDev(id) {
     big: false,
     card: null,
     online: false,        // Pi ↔ 伺服器連線（由 link 訊息維護）
+    bed: "",              // 床號（伺服器裝置清冊；空字串 = 未指定）
+    asset: "",            // 呼吸器財編（本頁不顯示，僅管理頁用）
     alarmLevel: 0,        // 目前最嚴重警報等級（0 = 無警報）
     soundAlarm: null,     // 目前拿來選擇警報等級的完整警報（含 cp/code/level/prio）
     muteUntil: 0,         // 靜音截止時間戳（ms）；按一次靜音 MUTE_SEC 秒，再按取消
@@ -280,6 +282,15 @@ function ensureDev(id) {
   emptyHint.classList.add("hidden");
   sortGrid();
   return dev;
+}
+
+// 卡片標題以床號為主。床號在伺服器的裝置清冊維護（管理頁），還沒指定的
+// 就退回機台編號並標成未指定——否則床號全空時所有卡片長得一樣，分不出誰是誰。
+function renderDevName(dev, card) {
+  const el = (card || dev.card).querySelector(".dev-name");
+  el.textContent = dev.bed || dev.id;
+  el.classList.toggle("unassigned", !dev.bed);
+  el.title = dev.bed ? `${dev.bed}（${dev.id}）` : `${dev.id}（未指定床號）`;
 }
 
 function buildCard(dev) {
@@ -347,7 +358,7 @@ function buildCard(dev) {
         <div class="prediction-note">目前不產生推估值</div>
       </section>
     </div>`;
-  card.querySelector(".dev-name").textContent = dev.id;
+  renderDevName(dev, card);
   dev.muteBtn = card.querySelector(".mute-btn");
   dev.muteBtn.addEventListener("click", (e) => {
     e.stopPropagation();               // 不觸發卡片放大
@@ -371,6 +382,11 @@ function buildCard(dev) {
   const alarmBand = document.createElement("div");
   alarmBand.className = "wave-alarm hidden";
   waves.appendChild(alarmBand);
+  const noSignal = document.createElement("div");
+  noSignal.className = "no-signal";
+  noSignal.textContent = "無訊號";
+  noSignal.setAttribute("role", "status");
+  card.querySelector(".monitor-main").appendChild(noSignal);
 
   dev.loopCanvas = card.querySelector(".loop-chart canvas");
   dev.loopEmpty = card.querySelector(".loop-empty");
@@ -385,7 +401,9 @@ function buildCard(dev) {
   dev.loopSelect.addEventListener("click", (e) => e.stopPropagation());
   dev.alarmHistoryEl = card.querySelector(".alarm-history-list");
 
-  card.addEventListener("click", () => { if (!dev.big) expand(dev); });
+  card.addEventListener("click", () => {
+    if (!dev.big && dev.online) expand(dev);
+  });
   card.querySelector(".close-btn").addEventListener("click", (e) => {
     e.stopPropagation();
     collapse(dev);
@@ -410,12 +428,21 @@ function syncGridPlaceholders() {
   }
 }
 
+// 依床號排序；還沒指定床號的一律排在最後（以機台編號互相排序），
+// 免得未指定的卡片夾在床號中間，讓護理站找不到某一床。
+// 數字感知排序：RCC-1、RCC-2、RCC-10，而不是 RCC-1、RCC-10、RCC-2。
+const collate = (a, b) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
 function sortGrid() {
   [...grid.children]
     .filter((el) => el.classList.contains("card"))
-    // 數字感知排序：device-1、device-2、device-10，而不是 device-1、device-10、device-2。
-    .sort((a, b) => a.dataset.device.localeCompare(
-      b.dataset.device, undefined, { numeric: true, sensitivity: "base" }))
+    .sort((a, b) => {
+      const bedA = a.dataset.bed || "";
+      const bedB = b.dataset.bed || "";
+      if (!bedA !== !bedB) return bedA ? -1 : 1;   // 有床號的排前面
+      return collate(bedA, bedB) || collate(a.dataset.device, b.dataset.device);
+    })
     .forEach((el) => grid.appendChild(el));
   syncGridPlaceholders();
 }
@@ -466,12 +493,12 @@ function setupCanvases(dev) {
     c.w = cssW; c.h = cssH;
     c.prevY = null;
     c.ctx.clearRect(0, 0, c.w, c.h);
-    drawZeroLine(c, CHANNELS[i], 0, c.w);
+    if (dev.online) drawZeroLine(c, CHANNELS[i], 0, c.w);
   }
   // 從歷史重播，畫面不留白。掃描位置接續 resize/放大前的位置：
   // 從「原位置往回推 n 個樣本」處起畫，重播完剛好回到原位置，
   // 波形繼續往前掃而不是從左端重新開始（畫到一半突然歸零很干擾判讀）
-  const n = dev.chans[0].hist.length;
+  const n = dev.online ? dev.chans[0].hist.length : 0;
   if (n) {
     const period = WINDOW_SEC * dev.rate;    // 掃描一輪的樣本數
     let start = (oldPos - n) % period;
@@ -625,6 +652,10 @@ function drawLoop(dev) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
+  if (!dev.online) {
+    dev.loopEmpty.classList.add("hidden");
+    return;
+  }
 
   const cfg = LOOP_TYPES[selectedLoopType] || LOOP_TYPES.pv;
   const margin = { left: 54, right: 14, top: 12, bottom: 34 };
@@ -750,6 +781,7 @@ requestAnimationFrame(frame);
 
 // ── 訊息處理 ─────────────────────────────────────────────────────
 function onWave(dev, m) {
+  if (!dev.online) return;
   const nSamples = m.p.length;
   // 取樣率估計：用「發送端時間戳」的滑動視窗（不受網路到達抖動影響）
   const t = typeof m.ts === "number" ? m.ts : Date.now() / 1000;
@@ -770,11 +802,59 @@ function onWave(dev, m) {
   }
 }
 
+function clearLiveContent(dev) {
+  dev.queue.length = 0;
+  dev.tsWin.length = 0;
+  dev.acc = 0;
+  dev.pos = 0;
+  dev.valThrottle = 0;
+  for (const ch of dev.chans) {
+    ch.hist.length = 0;
+    ch.prevY = null;
+    ch.valEl.textContent = "";
+    if (ch.ctx) ch.ctx.clearRect(0, 0, ch.w, ch.h);
+  }
+
+  dev.loopStarted = false;
+  dev.loopCurrent = [];
+  dev.loopBreaths = [];
+  if (dev.loopCanvas) {
+    const ctx = dev.loopCanvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, dev.loopCanvas.width, dev.loopCanvas.height);
+  }
+
+  setPatient(dev, "");
+  dev.card.querySelector(".mode-line").textContent = "";
+  dev.card.querySelector(".dev-info-line").textContent = "";
+  dev.card.querySelector(".kv-table.measured").innerHTML = "";
+
+  const strip = dev.card.querySelector(".param-strip");
+  strip.innerHTML = "";
+  layoutParamStrip(strip);
+
+  dev.card.querySelector(".head-alarms").innerHTML = "";
+  const band = dev.card.querySelector(".wave-alarm");
+  band.innerHTML = "";
+  band.className = "wave-alarm hidden";
+  dev.card.classList.remove("alarming-1", "alarming-2", "alarming-3");
+  dev.alarmLevel = 0;
+  dev.soundAlarm = null;
+  dev.muteUntil = 0;
+  updateMuteBtn(dev);
+}
+
 function onLink(dev, m) {
-  // 文字版連線狀態（呼吸器/伺服器）在管理頁 /admin；本頁只以紅框呈現離線
+  // 離線資料已失去即時性：保留設備卡與位置，但清空所有即時內容。
+  const wasOnline = dev.online;
   dev.online = !!m.online;
   dev.card.classList.toggle("pi-offline", !dev.online);
-  if (m.online && m.patient !== undefined) setPatient(dev, m.patient);
+  if (!dev.online) {
+    clearLiveContent(dev);
+    if (dev.big) collapse(dev);
+    return;
+  }
+  if (!wasOnline) setupCanvases(dev);
+  if (m.patient !== undefined) setPatient(dev, m.patient);
 }
 
 function setPatient(dev, patient) {
@@ -841,7 +921,7 @@ function minimumChipWidth(chip) {
 }
 
 function layoutExpandedParamStrip(strip, chips, tier) {
-  strip.classList.remove("params-hidden");
+  strip.classList.remove("params-hidden", "params-empty");
   strip.setAttribute("aria-hidden", "false");
   strip.style.removeProperty("grid-template-columns");
   for (const chip of chips) {
@@ -854,17 +934,35 @@ function layoutExpandedParamStrip(strip, chips, tier) {
   }
 }
 
+function ensureEmptyParamPlaceholder(strip) {
+  if (strip.querySelector(".param-placeholder")) return;
+  const placeholder = document.createElement("div");
+  placeholder.className = "pchip param-placeholder";
+  placeholder.setAttribute("aria-hidden", "true");
+  placeholder.innerHTML = '<div class="k">&nbsp;</div><div class="val">&nbsp;</div>';
+  strip.appendChild(placeholder);
+}
+
 function layoutParamStrip(strip) {
   if (!strip || !strip.isConnected) return false;
   const card = strip.closest(".card");
-  const chips = [...strip.querySelectorAll(".pchip")];
+  const chips = [...strip.querySelectorAll(".pchip:not(.param-placeholder)")];
 
   if (!chips.length) {
-    strip.classList.add("params-hidden");
+    // Pi 已連上辦公室端但呼吸器尚未連線時，不會有模式或設定值。
+    // 小卡仍保留一列設定值的高度，避免同一列卡片因資料到達時突然位移；
+    // 放大檢視則沒有對齊需求，維持隱藏空列。
+    const reserveEmptySpace = !card.classList.contains("big");
+    if (reserveEmptySpace) ensureEmptyParamPlaceholder(strip);
+    else strip.querySelector(".param-placeholder")?.remove();
+    strip.classList.toggle("params-empty", reserveEmptySpace);
+    strip.classList.toggle("params-hidden", !reserveEmptySpace);
     strip.setAttribute("aria-hidden", "true");
+    strip.style.removeProperty("grid-template-columns");
     return false;
   }
 
+  strip.querySelector(".param-placeholder")?.remove();
   const tier = paramFontTier(card);
   if (card.classList.contains("big")) {
     layoutExpandedParamStrip(strip, chips, tier);
@@ -872,7 +970,7 @@ function layoutParamStrip(strip) {
   }
 
   // 先解除上次的隱藏與欄寬，才能取得這次實際卡片寬度。
-  strip.classList.remove("params-hidden");
+  strip.classList.remove("params-hidden", "params-empty");
   strip.setAttribute("aria-hidden", "false");
   strip.style.removeProperty("grid-template-columns");
 
@@ -931,6 +1029,7 @@ const paramCardResizeObserver = typeof ResizeObserver === "function"
   : null;
 
 function onParams(dev, m) {
+  if (!dev.online) return;
   // 主模式（VC-SIMV…）與特性旗標（/AF…）分開：放大檢視「模式」顯示完整（含特性），
   // 小卡設定值列只放主模式，避免欄數多時字太長折到第二行
   const modeBase = m.mode || "";
@@ -1040,6 +1139,7 @@ async function loadAlarmHistory(dev) {
 }
 
 function onAlarm(dev, m) {
+  if (!dev.online) return;
   // 全量更新：alarms 為目前所有警報（空陣列 = 解除）。
   // 依分級（RMAlarm，見 alarm_levels.js）由重到輕排序，同級再依 MEDIBUS 優先級高→低。
   // 兩處呈現：放大檢視在 header 顯示完整清單（各自分級上色）；小卡以半透明橫幅疊在
@@ -1105,12 +1205,29 @@ function fillTable(el, obj) {
 }
 
 function onDeviceInfo(dev, m) {
+  if (!dev.online) return;
   const i = m.info || {};
   dev.card.querySelector(".dev-info-line").textContent =
     `設備: ${i.name || "—"}  ID:${i.id || "—"}  Rev:${i.revision || "—"}  MEDIBUS:${i.medibus || "—"}`;
 }
 
 /** 管理員從管理頁移除離線裝置 → 這裡同步拿掉卡片 */
+// 床號／財編由伺服器的裝置清冊提供（snapshot 帶初值，之後靠 device_meta 更新）。
+// dataset.bed 是排序的依據，所以改完一定要重排。
+function applyDeviceMeta(dev, m) {
+  dev.bed = m.bed || "";
+  dev.asset = m.asset || "";
+  dev.card.dataset.bed = dev.bed;
+  renderDevName(dev);
+}
+
+function onDeviceMeta(m) {
+  const dev = devices.get(m.device);
+  if (!dev) return;                  // 還沒連過線的裝置不在看板上
+  applyDeviceMeta(dev, m);
+  sortGrid();
+}
+
 function onDeviceRemoved(id) {
   const dev = devices.get(id);
   if (!dev) return;
@@ -1138,7 +1255,9 @@ function dispatch(m) {
   if (m.type === "snapshot") {
     for (const d of m.devices || []) {
       const dev = ensureDev(d.device);
+      applyDeviceMeta(dev, d);
       onLink(dev, { online: d.online, patient: d.patient });
+      if (!dev.online) continue;       // snapshot 可能仍含離線前的最後資料，不可重新顯示
       for (const k of SNAPSHOT_KEYS) {
         if (d[k]) MSG_HANDLERS[k](dev, d[k]);
       }
@@ -1148,6 +1267,7 @@ function dispatch(m) {
     return;
   }
   if (m.type === "device_removed") { onDeviceRemoved(m.device); return; }
+  if (m.type === "device_meta") { onDeviceMeta(m); return; }
   if (!m.device) return;
   const handler = MSG_HANDLERS[m.type];
   if (handler) handler(ensureDev(m.device), m);
@@ -1168,6 +1288,8 @@ function connect() {
   ws.onclose = () => {
     connEl.textContent = "斷線重連中";
     connEl.className = "conn offline";
+    // 看板與伺服器斷線後，所有畫面都已不是即時資料；卡片保留但立即清空。
+    devices.forEach((dev) => onLink(dev, { online: false }));
     // session 過期（閒置逾時/被登出）→ 導回登入頁，而不是無限重連失敗
     fetch("/api/me")
       .then((r) => {

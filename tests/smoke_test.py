@@ -618,6 +618,60 @@ async def run_checks():
     check("配對核發的 token 是逐台獨立（別台冒用會被拒）",
           not await check_paired_token_accepted("smoke-01", PAIRED_TOKEN))
 
+    # ── 床號與呼吸器財編（PROTOCOL.md「裝置床號與財編」）──────────────
+    # 承接上面：SMOKE-PAIR-01 剛配對完成，是唯一已登記在 devices.json 的裝置。
+    meta_url = f"{BASE}/api/admin/devices/{PAIR_DEVICE}/meta"
+    async with new_session() as s:
+        async with s.put(meta_url, json={"bed": "RCC-01"}) as r:
+            check("未登入設定床號回 401", r.status == 401)
+
+    async with authed.put(f"{BASE}/api/admin/devices/smoke-01/meta",
+                          json={"bed": "RCC-99"}) as r:
+        check("未登記的裝置不可設床號（404）", r.status == 404)
+
+    async with authed.put(meta_url, json={"bed": "RCC-01", "asset": "A-12345"}) as r:
+        body = await r.json() if r.status == 200 else {}
+        check("admin 設定床號與財編",
+              r.status == 200 and body.get("bed") == "RCC-01"
+              and body.get("asset") == "A-12345", str(body))
+
+    meta_seen = None
+    async with authed.ws_connect(f"{BASE}/ws") as ws:
+        m = await ws.receive(timeout=3.0)
+        snap = json.loads(m.data) if m.type == aiohttp.WSMsgType.TEXT else {}
+        paired = next((d for d in snap.get("devices", [])
+                       if d.get("device") == PAIR_DEVICE), None)
+        check("snapshot 帶出床號與財編",
+              bool(paired) and paired.get("bed") == "RCC-01"
+              and paired.get("asset") == "A-12345", str(paired)[:90])
+
+        async with authed.put(meta_url, json={"bed": "RCC-02"}) as r:
+            check("只送 bed 時財編保留",
+                  r.status == 200 and (await r.json()).get("asset") == "A-12345")
+        end = time.time() + 3.0
+        while time.time() < end and meta_seen is None:
+            try:
+                m = await ws.receive(timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            if m.type != aiohttp.WSMsgType.TEXT:
+                break
+            d = json.loads(m.data)
+            if d.get("type") == "device_meta" and d.get("device") == PAIR_DEVICE:
+                meta_seen = d
+    check("改床號有廣播 device_meta（看板不必重整）",
+          bool(meta_seen) and meta_seen.get("bed") == "RCC-02", str(meta_seen))
+
+    async with authed.get(f"{BASE}/static/app.js") as r:
+        app_js2 = await r.text() if r.status == 200 else ""
+        check("看板卡片以床號為標題、未指定時退回機台編號",
+              "dev.bed || dev.id" in app_js2 and "unassigned" in app_js2)
+        check("看板依床號排序（未指定排最後）", "dataset.bed" in app_js2)
+    async with authed.get(f"{BASE}/static/admin.js") as r:
+        admin_js = await r.text() if r.status == 200 else ""
+        check("管理頁可搜尋床號／機台編號／財編",
+              "devFilter" in admin_js and "dev.asset" in admin_js)
+
     # 拒絕流程：Pi 端要查得到「被拒絕」，而不是傻等到逾時
     async with new_session() as s:
         async with s.post(f"{BASE}/api/pair/request",
@@ -648,7 +702,8 @@ async def run_checks():
     for ev in ("login_ok", "login_fail", "logout", "device_online",
                "device_offline", "admin_view_accounts", "admin_download_syslog",
                "admin_remove_device", "device_removed", "device_reject",
-               "pair_requested", "pair_approved", "pair_claimed", "pair_denied"):
+               "pair_requested", "pair_approved", "pair_claimed", "pair_denied",
+               "admin_set_device_meta"):
         check(f"audit.log 含事件 {ev}", ev in audit_text)
     check("audit.log 不含病人代碼",
           not any(p in audit_text for p in ("SMOKE001", "SMOKE002", "SMOKE003")))

@@ -38,6 +38,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 | `GET /admin` | 設備維護管理頁：所有裝置健康總表 + sys 趨勢圖 |
 | `GET /api/admin/accounts` | 帳號唯讀清單 `{"users":[{"username":...,"role":...}]}`（不含密碼雜湊；建立/刪除仍用 `tools/make_user.py`） |
 | `DELETE /api/admin/devices/{device}` | 移除**離線**裝置（清出儀表板版面；裝置重新連上會自動回來）。線上裝置回 409、未知裝置回 404 |
+| `PUT /api/admin/devices/{device}/meta` | 設定該裝置的**床號**與**呼吸器財編**（見「裝置床號與財編」一節） |
 | `GET /api/admin/syslog/{device}` | 從 SQLite 即時匯出該裝置最近 7 天的 sys CSV（`sys_<裝置>.csv`）；無紀錄回 404 |
 | `GET /api/admin/alarmlog/{device}` | 從 SQLite 即時匯出該裝置最近 7 天的警報 episode CSV（`alarm_<裝置>.csv`，含開始、結束、持續秒數、狀態及警報內容）；只記機台編號與警報內容，不記病人代碼；無紀錄回 404 |
 | `GET /api/admin/pair/pending` | 待核可的裝置配對清單（見「裝置配對」一節） |
@@ -123,6 +124,36 @@ Pi ◀── {"status":"approved", "token": ...} 一次性領取 → 寫 telemet
 
 已核可但 Pi 一直沒來領取時，該筆在 TTL 後失效，但 `devices.json` 中的裝置項目會留著（無人知道其 token，形同停用）；重新配對即覆蓋換發。
 
+## 裝置床號與財編
+
+儀表板卡片以**床號**為主要標題，**呼吸器財編**供盤點與報修對應實體機器。兩者都**只存在伺服器**（`devices.json` 中該裝置的項目），由管理員在 `/admin` 維護——Pi 端完全不參與，也不需要知道自己在哪一床。
+
+- 一台呼吸器配一台 Pi，呼吸器隨病人移動，Pi 也跟著走；因此「機台編號 → 財編」是穩定的綁定，床號則在移床時由管理員更新。
+- 床號只用於**顯示與排序**，不涉及病人身分：病人代碼仍由床邊輸入（見 `hello` 的 `patient`）。
+- 尚未指定床號的裝置，儀表板退回顯示機台編號（以較淡的樣式標示未指定），排序時排在已指定床號的裝置之後。
+- ⚠️ 只有**已登記在 `devices.json` 的裝置**才能設定床號與財編。若伺服器目前是「單一共用 `ingest_token`」模式（`devices.json` 不存在），設定會被拒絕（回 409）——否則會憑空建出該檔案、把伺服器切換成逐台驗證模式，導致所有既有裝置重連被拒。此時請先完成裝置配對。
+
+`devices.json` 中每台裝置的欄位：
+
+| 欄位 | 說明 |
+|---|---|
+| `device_id` | 機台編號（Pi 的 hostname），`hello` 用來識別 |
+| `token_hash` | 存取權杖的 PBKDF2 雜湊 |
+| `enabled` | 是否啟用；false 時該裝置一律拒絕連線 |
+| `note` | 管理員備註（自由文字） |
+| `bed` | 床號，例 `RCC-01`；空字串 = 未指定 |
+| `asset` | 呼吸器財編；空字串 = 未指定 |
+
+### `PUT /api/admin/devices/{device}/meta`
+
+請求：`{"bed": "RCC-01", "asset": "A-123456"}`
+兩個欄位都選填（省略者保留原值，傳空字串則清除），上限各 32 字元。
+
+- 200：`{"device": ..., "bed": ..., "asset": ...}`，同時對所有觀看端廣播 `device_meta`。
+- 404 `{"error": "裝置未登記"}`：`devices.json` 中沒有這台（尚未配對）。
+- 409 `{"error": "..."}`：伺服器尚未啟用逐台裝置驗證（見上方警告）。
+- 500 `{"error": "devices.json 寫入失敗"}`。
+
 ## 第一段：Pi → 伺服器（TCP，每行一個 JSON，`\n` 結尾）
 
 連線後第一則必須是 `hello`，否則伺服器斷線。
@@ -188,9 +219,10 @@ Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另�
 
 | type | 說明 |
 |---|---|
-| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`/`sys`）的最新一則 |
+| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online`/`bed`/`asset` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`/`sys`）的最新一則 |
 | `link` | Pi 與伺服器的連線狀態：`online` true/false（上線時附 `patient`）。注意這與 `status`（Pi 與呼吸器的串口狀態）是兩件事 |
 | `device_removed` | 管理員從管理頁移除離線裝置時廣播：`device` 機台編號。所有觀看端（儀表板與管理頁）應移除該裝置的畫面元素 |
+| `device_meta` | 管理員改了床號／財編時廣播：`device`、`bed`、`asset`。儀表板據此即時更新卡片標題與排序，不需重新整理 |
 
 `sys` 亦原樣轉發（加 `device`）。趨勢圖歷史另走 HTTP（不佔 WebSocket）：
 

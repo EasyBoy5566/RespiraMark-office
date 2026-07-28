@@ -8,24 +8,22 @@ devices.json，Pi 一次性領走明文並寫進自己的 telemetry.json。
 
 設計要點：
 - **devices.json 讀寫分離**：驗證（讀）在 transport/device_auth.py 的
-  DeviceRegistry，本模組只負責寫入。架構規則禁止 domain import transport，
-  因此這裡自己讀檔判斷「是否為換發」，路徑由 main.py 注入（同一個檔）。
+  DeviceRegistry；檔案的讀改寫集中在 domain/device_directory.py，本模組
+  只負責配對狀態機，不自己碰檔案。
 - 待核可資料**只存記憶體**（10 分鐘短命資料），伺服器重啟即失效，Pi 端
   重新配對的成本近乎零，不值得為此增加持久化與其失效邏輯。
 - 過期清理採 **lazy**：每個公開方法入口清一次。待核可筆數本來就有上限，
   記憶體有界，不需要額外的背景 task 與其生命週期管理。
 - token 明文**只在核可後、被領取前**存在於記憶體，領取的同時整筆刪除。
 
-⚠️ devices.json 目前有三個獨立寫入者（本模組、tools/make_device.py、
-tools/fake_pi.py），各自「整檔讀-改-寫」而無跨程序鎖。本模組已用
-tmp + fsync + os.replace 確保單次寫入是原子的（不會讀到半截檔），但若在
-伺服器執行配對的**同時**手動跑 make_device.py，仍可能互相覆蓋。院內單一
-管理員的使用情境下屬可接受風險。
+⚠️ devices.json 目前有三個獨立寫入者（伺服器的 DeviceDirectory、
+tools/make_device.py、tools/fake_pi.py），各自「整檔讀-改-寫」而無跨程序鎖。
+DeviceDirectory 已用 tmp + fsync + os.replace 確保單次寫入是原子的（不會讀到
+半截檔），但若在伺服器執行配對的**同時**手動跑 make_device.py，仍可能互相
+覆蓋。院內單一管理員的使用情境下屬可接受風險。
 """
 
-import json
 import logging
-import os
 import re
 import secrets
 import threading
@@ -50,9 +48,9 @@ class PairingService:
     其餘方法在 event loop 執行緒，因此所有共用狀態一律用 self._lock 保護。
     """
 
-    def __init__(self, devices_path: str, ingest_port: int,
+    def __init__(self, directory, ingest_port: int,
                  ttl: float = 600.0, max_pending: int = 5, now_fn=None):
-        self.devices_path = devices_path
+        self.directory = directory       # DeviceDirectory（devices.json 唯一寫入者）
         self.ingest_port = int(ingest_port)
         self.ttl = float(ttl)
         self.max_pending = max(1, int(max_pending))
@@ -227,54 +225,10 @@ class PairingService:
             self.log.info(f"配對逾時失效: {e['device_id']} ({reason})")
         return dead
 
-    def _load_devices(self) -> dict:
-        """讀 devices.json；讀不到或格式壞掉回空結構（與 make_device.py 一致）"""
-        try:
-            with open(self.devices_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data.get("devices"), list):
-                return data
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError) as e:
-            self.log.warning(f"裝置權杖檔讀取失敗（將重建）: {e}")
-        return {"devices": []}
-
     def _device_exists(self, device_id: str) -> bool:
         """已登記過同名裝置 → 這次核可是「換發」，管理頁要顯示警告"""
-        return any(d.get("device_id") == device_id
-                   for d in self._load_devices().get("devices", []))
+        return self.directory.has_device(device_id)
 
     def _write_device(self, device_id: str, note: str, token_hash: str) -> bool:
-        """新增或覆寫一台裝置（欄位格式與 tools/make_device.py 相同），
-        以 tmp + fsync + os.replace 原子寫入。失敗只記 log 回 False——
-        配對失敗遠比伺服器崩潰好。"""
-        data = self._load_devices()
-        devices = data["devices"]
-        entry = {"device_id": device_id, "note": note,
-                 "enabled": True, "token_hash": token_hash}
-        for i, d in enumerate(devices):
-            if d.get("device_id") == device_id:
-                # 換發：保留管理員原本填的備註（配對申請的 note 只在新增時採用）
-                entry["note"] = d.get("note") or note
-                devices[i] = entry
-                break
-        else:
-            devices.append(entry)
-
-        tmp = self.devices_path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, self.devices_path)
-            return True
-        except OSError as e:
-            self.log.error(f"裝置權杖檔寫入失敗: {e}")
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            return False
+        """新增或換發（含床號／財編的保留規則）交給 DeviceDirectory"""
+        return self.directory.upsert_device(device_id, note, token_hash)

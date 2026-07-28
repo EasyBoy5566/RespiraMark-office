@@ -22,6 +22,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
+from monitor.domain.device_directory import DeviceDirectory
 from monitor.domain.hub import TelemetryHub
 from monitor.domain.pairing import PairingService
 from monitor.transport.device_auth import DeviceRegistry
@@ -187,8 +188,11 @@ async def main():
     authmgr = build_auth_manager(cfg, tls_on=ssl_ctx is not None)
 
     # 裝置權杖：devices.json 存在則每台獨立驗證，否則退回單一 ingest_token（向後相容）
+    # 同一個檔案兩種用途：驗證由 transport 的 DeviceRegistry 唯讀比對，
+    # 清冊（床號／財編）的讀改寫集中在 domain 的 DeviceDirectory。
     devices_path = _resolve(str(cfg.get("devices_file") or "devices.json"))
     devices = DeviceRegistry(devices_path)
+    directory = DeviceDirectory(devices_path)
     log = logging.getLogger("main")
     if devices.exists():
         log.info(f"裝置權杖模式：每台獨立（devices.json，共 {len(devices.list_devices())} 台）")
@@ -200,7 +204,7 @@ async def main():
     # 裝置配對（讀 devices.json 的是上面的 DeviceRegistry，寫入的是這裡；見 PROTOCOL.md）
     pairing = None
     if cfg.get("pair_enabled", True):
-        pairing = PairingService(devices_path, int(cfg["ingest_port"]),
+        pairing = PairingService(directory, int(cfg["ingest_port"]),
                                  ttl=float(cfg["pair_ttl"]),
                                  max_pending=int(cfg["pair_max_pending"]))
         log.info(f"裝置配對已啟用：Pi 可在 :{cfg['web_port']} 申請，於 /admin 核可")
@@ -221,7 +225,8 @@ async def main():
                        sys_retention_days=int(cfg["sys_retention_days"]),
                        max_viewers=int(cfg["max_viewers"]),
                        alarm_db_path=alarm_db_path,
-                       alarm_retention_days=int(cfg["alarm_retention_days"]))
+                       alarm_retention_days=int(cfg["alarm_retention_days"]),
+                       directory=directory)
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
                                        token=str(cfg["ingest_token"] or ""),
                                        ssl_ctx=ssl_ctx,

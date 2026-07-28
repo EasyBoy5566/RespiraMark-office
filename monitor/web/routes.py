@@ -73,6 +73,40 @@ async def admin_remove_device(request):
         text='{"error": "未知裝置"}', content_type="application/json")
 
 
+async def admin_set_device_meta(request):
+    """PUT /api/admin/devices/{device}/meta → 設定床號與呼吸器財編。
+
+    只對已登記在 devices.json 的裝置有效——清冊檔不存在時一律拒絕，
+    否則「順手改個床號」會憑空建出該檔，把伺服器切換成逐台驗證模式、
+    讓所有用共用權杖的既有裝置在下次重連時被拒（見 PROTOCOL.md）。"""
+    hub = request.app["hub"]
+    device = request.match_info["device"]
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("not an object")
+    except (ValueError, json.JSONDecodeError):
+        raise web.HTTPBadRequest(
+            text='{"error": "JSON 格式錯誤"}', content_type="application/json")
+
+    result, data = hub.set_device_meta(
+        device,
+        bed=body.get("bed") if "bed" in body else None,
+        asset=body.get("asset") if "asset" in body else None)
+    if result == "ok":
+        audit("admin_set_device_meta", actor=_actor(request), device=device)
+        return web.json_response(data)
+    if result == "not_found":
+        raise web.HTTPNotFound(
+            text='{"error": "裝置未登記"}', content_type="application/json")
+    if result == "no_registry":
+        raise web.HTTPConflict(
+            text='{"error": "伺服器尚未啟用逐台裝置驗證，請先完成裝置配對"}',
+            content_type="application/json")
+    raise web.HTTPInternalServerError(
+        text='{"error": "devices.json 寫入失敗"}', content_type="application/json")
+
+
 async def admin_syslog(request):
     """GET /api/admin/syslog/{device} → 從 SQLite 匯出該裝置七天 sys CSV。"""
     hub = request.app["hub"]
@@ -200,6 +234,7 @@ def create_app(hub, authmgr=None, tls_enabled=False, pairing=None) -> web.Applic
     app.router.add_get("/api/alarm-history/{device}", alarm_history)
     app.router.add_get("/api/admin/accounts", admin_accounts)
     app.router.add_delete("/api/admin/devices/{device}", admin_remove_device)
+    app.router.add_put("/api/admin/devices/{device}/meta", admin_set_device_meta)
     app.router.add_get("/api/admin/syslog/{device}", admin_syslog)
     app.router.add_get("/api/admin/alarmlog/{device}", admin_alarmlog)
     if pairing is not None:                      # 未啟用時端點根本不存在（404）

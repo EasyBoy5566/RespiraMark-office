@@ -24,6 +24,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 from monitor.crypto import verify_password
+from monitor.domain.device_directory import DeviceDirectory
 from monitor.domain.pairing import PairingService
 
 
@@ -33,8 +34,9 @@ class PairingTestBase(unittest.TestCase):
         os.close(fd)
         os.remove(self.path)                  # 預設從「還沒有 devices.json」開始
         self.clock = [1000.0]
-        self.svc = PairingService(self.path, ingest_port=8765, ttl=600.0,
-                                  max_pending=5, now_fn=lambda: self.clock[0])
+        self.svc = PairingService(DeviceDirectory(self.path), ingest_port=8765,
+                                  ttl=600.0, max_pending=5,
+                                  now_fn=lambda: self.clock[0])
 
     def tearDown(self):
         for p in (self.path, self.path + ".tmp"):

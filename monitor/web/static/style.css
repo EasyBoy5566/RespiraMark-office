@@ -18,7 +18,7 @@
   --c-wave:     #2F80ED;                    /* 波形統一單色（Primary Blue） */
   --grid:       #24364F;                    /* 波形零線/格線 */
   --trig:       rgba(255, 234, 0, 0.55);    /* Trigger 標記（#FFEA00 半透明） */
-  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 離線 header 底色 / 危險鈕 hover */
+  --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 危險鈕 hover */
   --on-red:     #FFFFFF;                     /* 警報色頂端列上的文字（紅底） */
   --on-amber:   #0B1320;                     /* 警報色頂端列上的文字（深色主題亮黃底 → 深字） */
   --on-blue:    #FFFFFF;                     /* 警報色頂端列上的文字（藍底） */
@@ -79,7 +79,7 @@
 }
 /* 監視器模式 版面結構：磚格完全貼齊、方角無圓、無浮起。大網格線由 grid 底色(--tile-line，偏白)
  * 透過 gap 透出；卡片內部線條另用 --divider（較深）→ 兩者分離、可各自調色。
- * 警報/離線框改用 outline（畫在磚格內，不佔版面、不破壞貼齊的格線）。*/
+ * 警報框改用 outline（畫在磚格內，不佔版面、不破壞貼齊的格線）。*/
 [data-theme="mono"] main#grid {
   gap: var(--tile-gap);
   padding: var(--tile-gap);                /* 與內網格同粗的四周外框 */
@@ -94,8 +94,7 @@
   min-width: 0;
   background: var(--card-bg);             /* 空位維持純黑，不顯示任何內容 */
 }
-[data-theme="mono"] .card.alarming-1,
-[data-theme="mono"] .card.pi-offline { outline: 2px solid var(--red);   outline-offset: -2px; }
+[data-theme="mono"] .card.alarming-1 { outline: 2px solid var(--red);   outline-offset: -2px; }
 [data-theme="mono"] .card.alarming-2 { outline: 2px solid var(--amber); outline-offset: -2px; }
 [data-theme="mono"] .card.alarming-3 { outline: 2px solid var(--blue);  outline-offset: -2px; }
 /* 設定值不用「框」：晶片去邊框/圓角/底色，值與值之間只留一條細直線（用較深的內部線色 --divider）*/
@@ -258,16 +257,21 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 /* ── 裝置卡片 ────────────────────────────────────────────── */
 .card {
   background: var(--card-bg);
-  border: 2px solid var(--divider);   /* 一律 2px：警報/離線只換色不改寬 → 尺寸永遠不變、不會把鄰卡推移 */
+  border: 2px solid var(--divider);   /* 一律 2px：警報只換色不改寬 → 尺寸永遠不變、不會把鄰卡推移 */
   border-radius: 10px;
   overflow: hidden;
   cursor: pointer;
 }
 .card:hover { border-color: var(--hover); }
-/* 離線醒目樣式（IMPROVEMENT_PLAN.md W-304）：紅框＋淡紅 header 一眼可辨，
- * 波形區維持原始亮度所在仍讀得到最後數值，只把整張卡稍微壓暗以示「非即時」 */
-.card.pi-offline { border-color: var(--red); filter: brightness(0.85); }
-.card.pi-offline .card-head { background: var(--alarm-bg); }
+/* 離線時保留卡片與設備名稱，但即時內容全部留白；不以紅框或變暗顯示過期資料。 */
+.card.pi-offline { cursor: default; }
+.card.pi-offline:hover { border-color: var(--divider); }
+[data-theme="mono"] .card.pi-offline:hover { background: var(--card-bg); }
+.card.pi-offline .wave-row,
+.card.pi-offline .mute-btn,
+.card.pi-offline .strip-cap { visibility: hidden; }
+.card.pi-offline.big .detail,
+.card.pi-offline.big .detail-lower { visibility: hidden; }
 
 .card-head {
   display: flex; align-items: center; gap: 8px;
@@ -277,6 +281,9 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
   flex-wrap: wrap;
 }
 .dev-name { font-weight: bold; font-size: 15px; }
+/* 還沒指定床號 → 退回顯示機台編號，用次要色與正常字重區隔，
+ * 一眼看得出「這張卡的床號還沒設」（設定處在管理頁）。 */
+.dev-name.unassigned { font-weight: normal; color: var(--text-secondary); }
 .patient  { color: var(--text-secondary); font-size: 13px; }
 .spacer { flex: 1; }
 
@@ -336,7 +343,7 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .mute-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .mute-btn.muted { color: var(--text-label); }
 
-/* 警示外框 + 頂端列同色（離線時 Pi 資料已不可信，維持離線樣式優先，故 :not）；
+/* 警示外框 + 頂端列同色；離線卡已清除警報，:not(.pi-offline) 再防止事件交錯時殘留顏色。
  * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber / --on-blue）確保可讀 */
 /* 邊框寬度固定（見 .card 一律 2px），警報只換色 → 尺寸不變、不會把鄰卡推移 */
 .card.alarming-1 { border-color: var(--red); }
@@ -380,8 +387,26 @@ main#grid[data-density="compact"] .wave-alarm { left: 6px; right: 6px; }
 main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; padding: 1px 5px; }
 
 /* ── 波形區 ─────────────────────────────────────────────── */
+.monitor-main { position: relative; }
 .waves { position: relative; padding: 4px 8px 2px; }
 .wave-row { position: relative; margin-bottom: 3px; }
+.no-signal {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+  pointer-events: none;
+}
+.card.pi-offline .no-signal { display: flex; }
+main#grid[data-density="mid"] .no-signal { font-size: 14px; }
+main#grid[data-density="compact"] .no-signal { font-size: 13px; }
+.card.big .no-signal { display: none !important; }
 .wave-row canvas {
   display: block; width: 100%; height: 58px;
   background: var(--card-bg);
@@ -390,20 +415,23 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
 }
 .card.big .wave-row canvas { height: 120px; }
 .wave-label {
-  position: absolute; top: 2px; left: 7px;
-  font-size: 11px; font-weight: bold; pointer-events: none;
+  position: absolute; top: 1px; left: 4px;
+  font-size: 9px; font-weight: bold; pointer-events: none;
   color: var(--c-wave);
 }
+.card.big .wave-label { top: 2px; left: 7px; font-size: 11px; }
 /* 波形標籤：小卡總覽只顯示名稱（Paw/Flow/Vol）；單位只在放大檢視顯示 */
 .wl-unit { display: none; }
 .card.big .wl-unit { display: inline; }
 .wave-val {
+  display: none;
   position: absolute; top: 2px; right: 8px;
   font-size: 13px; font-weight: bold;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   color: var(--c-wave);
 }
+.card.big .wave-val { display: block; }
 
 /* ── 參數列（卡片模式：顯示呼吸器設定值）────────────────── */
 /* 「設定值」小標：格線總覽一律不顯示（含 2–3 欄，只留參數晶片）；窄螢幕大卡才顯示（見下方 media query）*/
@@ -419,6 +447,7 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
   gap: 4px;
   padding: 4px 8px 8px;
 }
+.param-placeholder { visibility: hidden; pointer-events: none; }
 .param-strip.params-hidden { display: none !important; }
 .pchip {
   background: var(--bg-secondary);
@@ -978,6 +1007,29 @@ body.login-page {
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-card-info { border-top: none; padding-top: 2px; }
   .admin-card-foot { justify-content: flex-start; flex-wrap: wrap; }
+}
+
+/* 設備搜尋：床號／機台編號／財編任一符合即顯示 */
+.dev-toolbar { display: flex; gap: 10px; align-items: center; }
+.dev-filter {
+  flex: 0 1 340px;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+.dev-filter:focus { outline: none; border-color: var(--focus); }
+.dev-filter::placeholder { color: var(--text-disabled); }
+
+/* 管理頁卡片標題：床號為主，機台編號與財編以次要樣式跟在後面 */
+.admin-card-head .dev-name.unassigned { font-weight: normal; color: var(--text-secondary); }
+.admin-card-head .dev-ids {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--text-label);
 }
 
 /* 裝置配對申請：一列一筆，確認碼放大以便與 Pi 螢幕上的數字目視核對 */

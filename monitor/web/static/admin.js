@@ -40,12 +40,13 @@ function ensureDev(id) {
   let dev = devices.get(id);
   if (dev) return dev;
   dev = { id, online: false, sysHist: [], lastSys: null,
+          bed: "", asset: "",          // 裝置清冊（devices.json），只有這頁能改
           card: null, chips: {}, trendOpen: false, trendChans: null,
           histFetched: false, removeBtn: null, trendBtn: null };
   buildCard(dev);
   devices.set(id, dev);
-  devEmpty.classList.add("hidden");
   sortGrid();
+  applyFilter();               // 新卡片也要遵守目前的搜尋條件
   return dev;
 }
 
@@ -56,6 +57,7 @@ function buildCard(dev) {
   card.innerHTML = `
     <div class="admin-card-head">
       <span class="dev-name"></span>
+      <span class="dev-ids"></span>
       <span class="spacer"></span>
       <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
         <span class="status-tag">呼吸器</span>
@@ -69,6 +71,7 @@ function buildCard(dev) {
     <div class="metric-grid"></div>
     <div class="admin-card-info"></div>
     <div class="admin-card-foot">
+      <button type="button" class="admin-btn meta-btn">床號／財編</button>
       <button type="button" class="admin-btn trend-btn">趨勢 ▾</button>
       <button type="button" class="admin-btn">下載 CSV</button>
       <button type="button" class="admin-btn">警報紀錄</button>
@@ -78,7 +81,7 @@ function buildCard(dev) {
       <div class="sys-info-line"></div>
       <div class="sys-charts"></div>
     </div>`;
-  card.querySelector(".dev-name").textContent = dev.id;
+  renderDevIdentity(dev, card);
 
   const grid = card.querySelector(".metric-grid");
   for (const metric of RMSys.METRICS) {
@@ -90,7 +93,10 @@ function buildCard(dev) {
     dev.chips[metric.key] = chip.querySelector(".metric-val");
   }
 
-  const [trendBtn, csvBtn, alarmBtn, removeBtn] = card.querySelectorAll(".admin-card-foot button");
+  const [metaBtn, trendBtn, csvBtn, alarmBtn, removeBtn] =
+    card.querySelectorAll(".admin-card-foot button");
+  metaBtn.addEventListener("click", () => editMeta(dev));
+  metaBtn.title = "設定這台機器的床號與呼吸器財編（看板以床號顯示）";
   trendBtn.addEventListener("click", () => toggleTrend(dev));
   csvBtn.addEventListener("click", () => downloadCsv(dev.id));
   csvBtn.title = "從 SQLite 匯出這台機器最近 7 天的系統狀態 CSV";
@@ -105,13 +111,78 @@ function buildCard(dev) {
   renderCard(dev);
 }
 
+// numeric 讓 RCC-2 排在 RCC-10 前面，而不是一般字串順序的 1、10、2。
+const collate = (a, b) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
 function sortGrid() {
   [...devGrid.children]
-    // numeric 讓 device-2 排在 device-10 前面，而不是一般字串順序的 1、10、2。
-    .sort((a, b) => a.dataset.device.localeCompare(
-      b.dataset.device, undefined, { numeric: true, sensitivity: "base" }))
+    // 與看板一致：依床號排序，未指定床號的排在最後（改以機台編號互相排序）
+    .sort((a, b) => {
+      const bedA = a.dataset.bed || "";
+      const bedB = b.dataset.bed || "";
+      if (!bedA !== !bedB) return bedA ? -1 : 1;
+      return collate(bedA, bedB) || collate(a.dataset.device, b.dataset.device);
+    })
     .forEach((el) => devGrid.appendChild(el));
 }
+
+// ── 裝置清冊：床號與呼吸器財編（PROTOCOL.md「裝置床號與財編」）────────
+// 床號是看板卡片的標題；財編對應實體呼吸器，供盤點與報修，刻意只在本頁顯示。
+function renderDevIdentity(dev, card) {
+  const el = card || dev.card;
+  const name = el.querySelector(".dev-name");
+  name.textContent = dev.bed || dev.id;
+  name.classList.toggle("unassigned", !dev.bed);
+  // 標題已經是床號時，機台編號與財編改放旁邊，管理員仍看得到完整身分
+  const ids = [dev.bed ? dev.id : null, dev.asset ? `財編 ${dev.asset}` : null]
+    .filter(Boolean).join(" · ");
+  el.querySelector(".dev-ids").textContent = ids;
+  el.dataset.bed = dev.bed;
+}
+
+function applyMeta(dev, m) {
+  dev.bed = m.bed || "";
+  dev.asset = m.asset || "";
+  renderDevIdentity(dev);
+}
+
+function editMeta(dev) {
+  const bed = prompt(`${dev.id} 的床號（留空 = 未指定）`, dev.bed);
+  if (bed === null) return;
+  const asset = prompt(`${dev.id} 的呼吸器財編（留空 = 未指定）`, dev.asset);
+  if (asset === null) return;
+  fetch(`/api/admin/devices/${encodeURIComponent(dev.id)}/meta`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bed: bed.trim(), asset: asset.trim() }),
+  })
+    .then((r) => {
+      // 成功時不用動畫面：伺服器會廣播 device_meta，看板與本頁一起更新
+      if (!r.ok) return r.json().then((j) => alert(j.error || "設定失敗"));
+    })
+    .catch(() => alert("設定失敗：無法連線伺服器"));
+}
+
+// 搜尋：床號、機台編號、財編任一符合就顯示。財編是實體機器上的標籤，
+// 用它就能查出這台呼吸器現在在哪一床。
+const deviceFilter = document.getElementById("devFilter");
+
+function applyFilter() {
+  const q = (deviceFilter.value || "").trim().toLowerCase();
+  let shown = 0;
+  for (const dev of devices.values()) {
+    const hit = !q || [dev.bed, dev.id, dev.asset]
+      .some((v) => (v || "").toLowerCase().includes(q));
+    dev.card.classList.toggle("hidden", !hit);
+    if (hit) shown++;
+  }
+  devEmpty.classList.toggle("hidden", shown > 0);
+  devEmpty.textContent = devices.size && !shown
+    ? "沒有符合的裝置" : "等待裝置連線";
+}
+
+deviceFilter.addEventListener("input", applyFilter);
 
 function renderCard(dev) {
   const m = dev.lastSys || {};
@@ -385,7 +456,7 @@ function onDeviceRemoved(id) {
   if (!dev) return;
   dev.card.remove();
   devices.delete(id);
-  if (!devices.size) devEmpty.classList.remove("hidden");
+  applyFilter();
 }
 
 function onSys(dev, m) {
@@ -404,14 +475,22 @@ function dispatch(m) {
   if (m.type === "snapshot") {
     for (const d of m.devices || []) {
       const dev = ensureDev(d.device);
+      applyMeta(dev, d);
       dev.online = !!d.online;
       if (d.sys) onSys(dev, d.sys);
       else renderCard(dev);
       if (d.status && dev.online) onStatus(dev, d.status);
     }
+    sortGrid();
+    applyFilter();
     return;
   }
   if (m.type === "device_removed") { onDeviceRemoved(m.device); return; }
+  if (m.type === "device_meta") {
+    const dev = devices.get(m.device);
+    if (dev) { applyMeta(dev, m); sortGrid(); applyFilter(); }
+    return;
+  }
   if (!m.device) return;
   if (m.type === "link") {
     const dev = ensureDev(m.device);

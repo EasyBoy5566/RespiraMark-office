@@ -98,7 +98,9 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 2. **伺服器端**：用 admin 帳號開 `/admin`，「裝置配對申請」區塊會在幾秒內出現該台，**核對確認碼與 Pi 螢幕一致**後按「核可」。
 3. Pi 自動領取 token 寫入自己的 `telemetry.json` 並立刻開始連線——管理員全程不會看到 token。
 
-同一台重複配對即換發新 token（核可頁會顯示警告，舊 token 於該台下次重連時失效）。
+配對完成後,在管理頁按該台的「床號／財編」填入**床號**（看板卡片的標題與排序依據）與**呼吸器財編**（對應實體機器，只顯示在管理頁）。還沒指定床號的裝置，看板會退回顯示機台編號。移床時在管理頁改床號即可，不用去床邊動 Pi。
+
+同一台重複配對即換發新 token（核可頁會顯示警告，舊 token 於該台下次重連時失效；床號、財編與備註都會保留）。
 申請 10 分鐘未處理即失效，Pi 端可重新申請。沒有真機時可用
 `python tools/fake_pi.py --pair --device pi-new` 演練這個畫面。
 
