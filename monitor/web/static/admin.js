@@ -56,8 +56,10 @@ function buildCard(dev) {
   card.dataset.device = dev.id;
   card.innerHTML = `
     <div class="admin-card-head">
-      <span class="dev-name"></span>
-      <span class="dev-ids"></span>
+      <span class="dev-title">
+        <span class="dev-name"></span>
+        <span class="dev-ids"></span>
+      </span>
       <span class="spacer"></span>
       <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
         <span class="status-tag">呼吸器</span>
@@ -71,7 +73,7 @@ function buildCard(dev) {
     <div class="metric-grid"></div>
     <div class="admin-card-info"></div>
     <div class="admin-card-foot">
-      <button type="button" class="admin-btn meta-btn">床號／財編</button>
+      <button type="button" class="admin-btn meta-btn">財編</button>
       <button type="button" class="admin-btn trend-btn">趨勢 ▾</button>
       <button type="button" class="admin-btn">下載 CSV</button>
       <button type="button" class="admin-btn">警報紀錄</button>
@@ -95,8 +97,8 @@ function buildCard(dev) {
 
   const [metaBtn, trendBtn, csvBtn, alarmBtn, removeBtn] =
     card.querySelectorAll(".admin-card-foot button");
-  metaBtn.addEventListener("click", () => editMeta(dev));
-  metaBtn.title = "設定這台機器的床號與呼吸器財編（看板以床號顯示）";
+  metaBtn.addEventListener("click", () => editAsset(dev));
+  metaBtn.title = "設定這台機器對應的呼吸器財編（床號之後由財編自動帶入）";
   trendBtn.addEventListener("click", () => toggleTrend(dev));
   csvBtn.addEventListener("click", () => downloadCsv(dev.id));
   csvBtn.title = "從 SQLite 匯出這台機器最近 7 天的系統狀態 CSV";
@@ -128,16 +130,19 @@ function sortGrid() {
 }
 
 // ── 裝置清冊：床號與呼吸器財編（PROTOCOL.md「裝置床號與財編」）────────
-// 床號是看板卡片的標題；財編對應實體呼吸器，供盤點與報修，刻意只在本頁顯示。
+// 財編對應實體呼吸器，是這裡唯一要人工填的欄位；床號不開放手動設定——
+// 它之後要由財編向院內系統查詢後自動帶入，開放人工填只會多一份會過期的來源。
 function renderDevIdentity(dev, card) {
   const el = card || dev.card;
   const name = el.querySelector(".dev-name");
   name.textContent = dev.bed || dev.id;
   name.classList.toggle("unassigned", !dev.bed);
-  // 標題已經是床號時，機台編號與財編改放旁邊，管理員仍看得到完整身分
-  const ids = [dev.bed ? dev.id : null, dev.asset ? `財編 ${dev.asset}` : null]
+  // 第二行固定顯示財編（管理頁的重點資訊）；標題已是床號時補上機台編號
+  const ids = [dev.bed ? dev.id : null,
+               dev.asset ? `財編 ${dev.asset}` : "財編未設定"]
     .filter(Boolean).join(" · ");
   el.querySelector(".dev-ids").textContent = ids;
+  el.querySelector(".dev-ids").classList.toggle("unassigned", !dev.asset);
   el.dataset.bed = dev.bed;
 }
 
@@ -147,15 +152,13 @@ function applyMeta(dev, m) {
   renderDevIdentity(dev);
 }
 
-function editMeta(dev) {
-  const bed = prompt(`${dev.id} 的床號（留空 = 未指定）`, dev.bed);
-  if (bed === null) return;
-  const asset = prompt(`${dev.id} 的呼吸器財編（留空 = 未指定）`, dev.asset);
+function editAsset(dev) {
+  const asset = prompt(`${dev.id} 對應的呼吸器財編（留空 = 未設定）`, dev.asset);
   if (asset === null) return;
   fetch(`/api/admin/devices/${encodeURIComponent(dev.id)}/meta`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ bed: bed.trim(), asset: asset.trim() }),
+    body: JSON.stringify({ asset: asset.trim() }),   // 不送 bed → 床號保持原值
   })
     .then((r) => {
       // 成功時不用動畫面：伺服器會廣播 device_meta，看板與本頁一起更新

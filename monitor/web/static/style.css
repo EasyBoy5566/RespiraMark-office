@@ -889,9 +889,11 @@ body.login-page {
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
+/* 四個系統指標只是「有沒有異常」的一眼掃描，不需要佔掉大半列寬；
+ * 把中欄壓縮，多出來的寬度讓給左欄（床號／機台編號／財編）。 */
 .admin-card {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.35fr) minmax(330px, 1.1fr);
+  grid-template-columns: minmax(300px, 1.3fr) minmax(250px, 0.85fr) minmax(330px, 1.1fr);
   grid-template-areas:
     "head metrics info"
     "head metrics foot"
@@ -908,6 +910,11 @@ body.login-page {
   background: var(--bg-secondary);
   border-right: 1px solid var(--divider);
 }
+/* 標題與識別資訊直向堆疊：財編有自己的一行，長字串也不會被狀態燈擠掉 */
+.admin-card-head .dev-title {
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 0;
+}
 .admin-card-head .dev-name {
   min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -919,22 +926,22 @@ body.login-page {
 .metric-grid {
   grid-area: metrics;
   display: grid;
-  grid-template-columns: repeat(4, minmax(70px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(52px, 1fr));
+  gap: 4px;
   align-items: center;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-right: 1px solid var(--divider);
 }
 .metric-chip {
   background: var(--bg-secondary);
   border: 1px solid var(--divider);
-  border-radius: 6px;
-  padding: 5px 6px;
+  border-radius: 5px;
+  padding: 3px 4px;
   text-align: center;
 }
-.metric-label { font-size: 11px; color: var(--text-label); }
+.metric-label { font-size: 10px; color: var(--text-label); }
 .metric-val {
-  font-size: 18px; font-weight: bold;
+  font-size: 15px; font-weight: bold;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
@@ -986,7 +993,7 @@ body.login-page {
 /* 中型視窗保留橫向感：名稱/狀態與四項指標並排，資訊及操作列放在下一行。 */
 @media (max-width: 1050px) {
   .admin-card {
-    grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr);
+    grid-template-columns: minmax(280px, 1.15fr) minmax(250px, 0.85fr);
     grid-template-areas:
       "head metrics"
       "info foot"
@@ -1023,14 +1030,14 @@ body.login-page {
 .dev-filter:focus { outline: none; border-color: var(--focus); }
 .dev-filter::placeholder { color: var(--text-disabled); }
 
-/* 管理頁卡片標題：床號為主，機台編號與財編以次要樣式跟在後面 */
+/* 管理頁卡片標題：床號為主（未帶入時顯示機台編號），財編固定在第二行 */
 .admin-card-head .dev-name.unassigned { font-weight: normal; color: var(--text-secondary); }
 .admin-card-head .dev-ids {
-  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12px; color: var(--text-label);
 }
+.admin-card-head .dev-ids.unassigned { color: var(--text-disabled); }
 
 /* 裝置配對申請：一列一筆，確認碼放大以便與 Pi 螢幕上的數字目視核對 */
 .pair-list { display: grid; gap: 8px; }
