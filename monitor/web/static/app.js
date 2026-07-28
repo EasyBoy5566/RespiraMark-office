@@ -1054,8 +1054,8 @@ function onAlarm(dev, m) {
   box.innerHTML = "";
   band.innerHTML = "";
   band.className = "wave-alarm hidden";
-  // level 3（不影響生命）不觸發卡片警示外框，只在列表中以淡藍顯示
-  dev.card.classList.remove("alarming-1", "alarming-2");
+  // 三級警報都會點亮整張卡；先清掉上一輪等級，避免警報降級／解除後殘留舊色。
+  dev.card.classList.remove("alarming-1", "alarming-2", "alarming-3");
   dev.alarmLevel = 0;
   dev.soundAlarm = null;
   if (!alarms.length) {
@@ -1085,7 +1085,7 @@ function onAlarm(dev, m) {
 
   dev.alarmLevel = worst;
   dev.soundAlarm = alarms[0];          // 保留完整資料，供同級警報以 prio 決定先後
-  if (worst <= 2) {
+  if (worst >= 1 && worst <= 3) {
     dev.card.classList.add(`alarming-${worst}`);
   }
   if (dev.big) loadAlarmHistory(dev);

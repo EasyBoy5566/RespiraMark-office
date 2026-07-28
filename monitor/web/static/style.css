@@ -21,6 +21,7 @@
   --alarm-bg:   rgba(255, 23, 68, 0.14);    /* 離線 header 底色 / 危險鈕 hover */
   --on-red:     #FFFFFF;                     /* 警報色頂端列上的文字（紅底） */
   --on-amber:   #0B1320;                     /* 警報色頂端列上的文字（深色主題亮黃底 → 深字） */
+  --on-blue:    #FFFFFF;                     /* 警報色頂端列上的文字（藍底） */
   --band-red:   rgba(255, 23, 68, 0.80);     /* 疊在波形上的警報橫幅底色（夠不透明才讀得到字，仍略透出波形）*/
   --band-amber: rgba(255, 238, 0, 0.8);
   --band-blue:  rgba(47, 128, 237, 0.80);
@@ -51,6 +52,7 @@
   --alarm-bg:   rgba(213, 0, 0, 0.08);
   --on-red:     #FFFFFF;
   --on-amber:   #FFFFFF;                     /* 淺色主題琥珀色較深（#B26E00）→ 白字 */
+  --on-blue:    #FFFFFF;
   --band-red:   rgba(213, 0, 0, 0.92);       /* 波形上警報橫幅底色（淺色主題）*/
   --band-amber: rgba(218, 203, 2, 0.95);
   --band-blue:  rgba(28, 110, 213, 0.92);
@@ -95,6 +97,7 @@
 [data-theme="mono"] .card.alarming-1,
 [data-theme="mono"] .card.pi-offline { outline: 2px solid var(--red);   outline-offset: -2px; }
 [data-theme="mono"] .card.alarming-2 { outline: 2px solid var(--amber); outline-offset: -2px; }
+[data-theme="mono"] .card.alarming-3 { outline: 2px solid var(--blue);  outline-offset: -2px; }
 /* 設定值不用「框」：晶片去邊框/圓角/底色，值與值之間只留一條細直線（用較深的內部線色 --divider）*/
 [data-theme="mono"] .pchip {
   background: transparent; border: none; border-radius: 0;
@@ -297,8 +300,7 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .link-status.off { color: var(--red); }
 
 /* ── 警報（狀態列中央置中；資料由 alarm 訊息驅動，分級見 alarm_levels.js）───
- * 嚴重度以整張卡的警示外框 + 頂端列底色呈現（.card.alarming-*，故意沒有 -3 版本）；
- * level 3（不影響生命）不觸發外框/底色，只在列表中以中性色顯示 */
+ * 三個等級都以整張卡的警示外框 + 頂端列底色呈現（紅／黃／藍）。 */
 /* 完整警報清單只在放大檢視的 header 顯示；小卡改用疊在 Paw 波形上的橫幅（.wave-alarm）*/
 .head-alarms {
   display: none;
@@ -335,12 +337,14 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .mute-btn.muted { color: var(--text-label); }
 
 /* 警示外框 + 頂端列同色（離線時 Pi 資料已不可信，維持離線樣式優先，故 :not）；
- * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber）確保可讀 */
+ * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber / --on-blue）確保可讀 */
 /* 邊框寬度固定（見 .card 一律 2px），警報只換色 → 尺寸不變、不會把鄰卡推移 */
 .card.alarming-1 { border-color: var(--red); }
 .card.alarming-2 { border-color: var(--amber); }
+.card.alarming-3 { border-color: var(--blue); }
 .card.alarming-1:not(.pi-offline) .card-head { background: var(--red); }
 .card.alarming-2:not(.pi-offline) .card-head { background: var(--amber); }
+.card.alarming-3:not(.pi-offline) .card-head { background: var(--blue); }
 .card.alarming-1:not(.pi-offline) .card-head .dev-name,
 .card.alarming-1:not(.pi-offline) .card-head .patient,
 .card.alarming-1:not(.pi-offline) .card-head .alarm-item,
@@ -349,6 +353,10 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .card.alarming-2:not(.pi-offline) .card-head .patient,
 .card.alarming-2:not(.pi-offline) .card-head .alarm-item,
 .card.alarming-2:not(.pi-offline) .card-head .mute-btn { color: var(--on-amber); }
+.card.alarming-3:not(.pi-offline) .card-head .dev-name,
+.card.alarming-3:not(.pi-offline) .card-head .patient,
+.card.alarming-3:not(.pi-offline) .card-head .alarm-item,
+.card.alarming-3:not(.pi-offline) .card-head .mute-btn { color: var(--on-blue); }
 
 /* ── 小卡警報（疊在波形區上方，從 Paw 頂端往下堆疊；放大檢視改用 header 完整清單）───
  * 每則警報一條半透明色帶（依自身分級上色），多則往下排、會蓋到下方 Flow/Vol 波形；
