@@ -671,6 +671,9 @@ async def run_checks():
         admin_js = await r.text() if r.status == 200 else ""
         check("管理頁可搜尋床號／機台編號／財編",
               "devFilter" in admin_js and "dev.asset" in admin_js)
+        check("管理頁把床號與財編各顯示成一個欄位（未綁定顯示 --）",
+              "dev-bed" in admin_js and "dev-asset" in admin_js
+              and '|| "--"' in admin_js)
         # 床號規劃由財編自動帶入，管理頁刻意不提供人工輸入（多一個人工來源
         # 就多一份會過期的資料）；API 仍接受 bed 供屆時自動寫入。
         check("管理頁只讓人填財編，不提供床號輸入欄位",

@@ -58,7 +58,14 @@ function buildCard(dev) {
     <div class="admin-card-head">
       <span class="dev-title">
         <span class="dev-name"></span>
-        <span class="dev-ids"></span>
+        <span class="dev-meta">
+          <span class="meta-item" title="床號由財編向院內系統查詢自動帶入（尚未接上）">
+            <span class="meta-key">床號</span><span class="dev-bed">--</span>
+          </span>
+          <span class="meta-item" title="這台機器對應的呼吸器財產編號">
+            <span class="meta-key">財編</span><span class="dev-asset">--</span>
+          </span>
+        </span>
       </span>
       <span class="spacer"></span>
       <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
@@ -117,32 +124,27 @@ function buildCard(dev) {
 const collate = (a, b) =>
   a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
+// 依機台編號排序：本頁的卡片標題就是機台編號，排序跟著標題走最好找。
+// （看板是護理站用的，那邊依床號排序，見 app.js sortGrid。）
 function sortGrid() {
   [...devGrid.children]
-    // 與看板一致：依床號排序，未指定床號的排在最後（改以機台編號互相排序）
-    .sort((a, b) => {
-      const bedA = a.dataset.bed || "";
-      const bedB = b.dataset.bed || "";
-      if (!bedA !== !bedB) return bedA ? -1 : 1;
-      return collate(bedA, bedB) || collate(a.dataset.device, b.dataset.device);
-    })
+    .sort((a, b) => collate(a.dataset.device, b.dataset.device))
     .forEach((el) => devGrid.appendChild(el));
 }
 
 // ── 裝置清冊：床號與呼吸器財編（PROTOCOL.md「裝置床號與財編」）────────
 // 財編對應實體呼吸器，是這裡唯一要人工填的欄位；床號不開放手動設定——
 // 它之後要由財編向院內系統查詢後自動帶入，開放人工填只會多一份會過期的來源。
+// 管理頁是管「機器」的，標題一律用機台編號（看板才以床號為標題）；
+// 床號與財編各自是一個看得到的欄位，沒有值就顯示 --，不用去猜是誰沒設定。
 function renderDevIdentity(dev, card) {
   const el = card || dev.card;
-  const name = el.querySelector(".dev-name");
-  name.textContent = dev.bed || dev.id;
-  name.classList.toggle("unassigned", !dev.bed);
-  // 第二行固定顯示財編（管理頁的重點資訊）；標題已是床號時補上機台編號
-  const ids = [dev.bed ? dev.id : null,
-               dev.asset ? `財編 ${dev.asset}` : "財編未設定"]
-    .filter(Boolean).join(" · ");
-  el.querySelector(".dev-ids").textContent = ids;
-  el.querySelector(".dev-ids").classList.toggle("unassigned", !dev.asset);
+  el.querySelector(".dev-name").textContent = dev.id;
+  for (const [sel, value] of [[".dev-bed", dev.bed], [".dev-asset", dev.asset]]) {
+    const field = el.querySelector(sel);
+    field.textContent = value || "--";
+    field.classList.toggle("unassigned", !value);
+  }
   el.dataset.bed = dev.bed;
 }
 

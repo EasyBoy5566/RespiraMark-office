@@ -1030,14 +1030,26 @@ body.login-page {
 .dev-filter:focus { outline: none; border-color: var(--focus); }
 .dev-filter::placeholder { color: var(--text-disabled); }
 
-/* 管理頁卡片標題：床號為主（未帶入時顯示機台編號），財編固定在第二行 */
-.admin-card-head .dev-name.unassigned { font-weight: normal; color: var(--text-secondary); }
-.admin-card-head .dev-ids {
+/* 管理頁卡片標題：機台編號為主，床號與財編各是一個帶標籤的欄位，
+ * 沒有值一律顯示 --（淡色），一眼看得出哪一項還沒綁定。 */
+.admin-card-head .dev-meta {
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  min-width: 0;
+  font-size: 12px;
+}
+.admin-card-head .meta-item {
+  display: inline-flex; gap: 5px; align-items: baseline;
+  min-width: 0;
+}
+.admin-card-head .meta-key { color: var(--text-label); }
+.admin-card-head .dev-bed,
+.admin-card-head .dev-asset {
   min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 12px; color: var(--text-label);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
-.admin-card-head .dev-ids.unassigned { color: var(--text-disabled); }
+.admin-card-head .unassigned { color: var(--text-disabled); }
 
 /* 裝置配對申請：一列一筆，確認碼放大以便與 Pi 螢幕上的數字目視核對 */
 .pair-list { display: grid; gap: 8px; }
