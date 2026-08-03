@@ -1,13 +1,16 @@
-/* 警報分級對照表 — 共用模組（分工規範見 CLAUDE.md §5；資料來源見 PROTOCOL.md「警報分級」）
- * MEDIBUS 警報碼本身沒有臨床嚴重度分級，且 codepage 1（27H）與 codepage 2（2EH）的
- * code 會重複但意義不同，所以用 "cp:code" 當對照表 key。
+/* 警報分級與名稱對照 — 共用模組（分工規範見 CLAUDE.md §5；規則見 PROTOCOL.md）
+ * MEDIBUS.X 以每筆警報的 prio 表示當下嚴重度：25～31 = High、11～24 = Medium、
+ * 1～10 = Low；同一 Alarm Code 在不同 responder 上可能有不同 prio，因此不能只靠 code 判級。
+ * codepage 1（27H）與 codepage 2（2EH）的 code 會重複但意義不同，所以名稱對照仍以
+ * "cp:code" 當 key。
  *
- * ★ 這份表由使用者維護（不在 Pi 端）：好處是改一次、所有連線中的 Pi 立刻套用，
- *   不需要改 Pi 端程式碼或重啟呼吸器監測程式。
+ * ★ 這份表由使用者維護（不在 Pi 端），負責完整名稱與 prio 無效時的備援分級；修改一次，
+ *   所有連線中的 Pi 立即套用，不需要改 Pi 端程式碼或重啟呼吸器監測程式。
  *
  * level： 1 = 危及生命／紅（IFU: High, "!!!"）　2 = 可能危及生命／黃（Medium, "!!"）
  *         3 = 不影響生命／淡藍（Low, "!"，IFU 原文為 Turquoise）
- * 查無對照的警報碼 → 用 DEFAULT_LEVEL（保守預設，不會被誤判成不重要）+ 裝置原始縮寫文字。
+ * 有效 prio 永遠優先；prio 缺少或超出 1～31 時才使用表內 level。連代碼也查無時，使用
+ * DEFAULT_LEVEL（保守預設，不會被誤判成不重要）+ 裝置原始縮寫文字。
  *
  * short/full 皆為 MEDIBUS.X Profile Definition（edition 22）原文英文，未翻譯、未改寫：
  *   short = Alarm phrase（裝置實際送出的縮寫，跟 wire 上的 text 對照用）
@@ -18,7 +21,7 @@
  *   2) IFU 對同一警報名稱給了兩種分級：已先取一個，行末註解列出兩個候選
  *   3) 中信心度猜測：字面相似但非精確比對，行末註解列出猜測依據
  *   4) 查無對照：IFU 章節找不到對應（含疑似 SmartCare 等非本章節訊息），level 為預設值
- * 2~4 段皆待使用者依實機或官方文件核對後調整。
+ * 2~4 段的 level 只影響無有效 prio 的備援情境，仍待使用者依實機或官方文件核對後調整。
  *
  * 全域命名空間：RMAlarm（原生 JS，無模組系統）
  */
@@ -26,6 +29,16 @@
 
 const RMAlarm = (() => {
   const DEFAULT_LEVEL = 2;
+
+  /** MEDIBUS.X Rules and Standards：P25～31 High、P11～24 Medium、P1～10 Low。 */
+  function levelFromPriority(prio) {
+    const value = Number(prio);
+    if (!Number.isInteger(value)) return null;
+    if (value >= 25 && value <= 31) return 1;
+    if (value >= 11 && value <= 24) return 2;
+    if (value >= 1 && value <= 10) return 3;
+    return null;
+  }
 
   // key 格式 "cp:code"（cp 與 code 皆為字串，需與 PROTOCOL.md 的 alarm.alarms[].cp/code 一致）。
   const TABLE = {
@@ -61,12 +74,12 @@ const RMAlarm = (() => {
     "1:FF": { level: 1, short: "DISCONNECT", full: "Disconnection ventilator" }, // guess: Disconnection? [!!!/200]
     "2:D8": { level: 3, short: "ID-FUNC-INOP", full: "Accessory ID detection functions inoperable" }, // guess: Accessory ID detection failed [!/060]
 
-    // ===== 查無對照（IFU 章節找不到，或疑似 SmartCare 等非警報分級訊息類）=====
-    // level 一律先填 DEFAULT_LEVEL(2)，請自行依實機或文件確認
+    // ===== 查無 IFU 對照（或疑似 SmartCare 等非警報分級訊息類）=====
+    // 多數 level 暫填 DEFAULT_LEVEL(2)；有實機 prio 紀錄者已依 MEDIBUS.X 範圍更新備援值。
     "1:08": { level: 2, short: "% O2 LOW", full: "Inspiratory oxygen concentration < low limit" },
     "1:12": { level: 2, short: "AIR SUPPLY ?", full: "Check air supply" },
     "1:13": { level: 2, short: "O2 SUPPLY ?", full: "Check O2 supply" },
-    "1:19": { level: 2, short: "MIN VOL LOW", full: "Minute volume < low limit" },
+    "1:19": { level: 1, short: "MIN VOL LOW", full: "Minute volume < low limit" }, // 實機 P29 = High
     "1:27": { level: 2, short: "ET CO2 LOW", full: "End-tidal CO2 < low limit" },
     "1:28": { level: 2, short: "ET CO2 HIGH", full: "End-tidal CO2 > high limit" },
     "1:33": { level: 2, short: "VOL INCONST", full: "Volume not constant" },
@@ -97,13 +110,13 @@ const RMAlarm = (() => {
     "2:5A": { level: 2, short: "BATTERY ON", full: "Power supply by battery" },
     "2:5C": { level: 2, short: "BATT. < 2MIN", full: "Battery less than 2 min left" },
     "2:5D": { level: 2, short: "BATT. < 5MIN", full: "Battery less than 5 min left" },
-    "2:6A": { level: 2, short: "TUBE OBSTRUC", full: "Tube obstructed" },
+    "2:6A": { level: 1, short: "TUBE OBSTRUC", full: "Tube obstructed" }, // 實機 P30 = High
     "2:90": { level: 2, short: "NEO FLOW?", full: "Check neonatal flow sensor" },
-    "2:94": { level: 2, short: "CHECK VENT", full: "Check ventilator" },
-    "2:9F": { level: 2, short: "NEBULIZ. OFF", full: "Nebulization terminated" },
+    "2:94": { level: 3, short: "CHECK VENT", full: "Check ventilator" }, // 實機 P6 = Low
+    "2:9F": { level: 3, short: "NEBULIZ. OFF", full: "Nebulization terminated" }, // 實機 P5 = Low
     "2:A1": { level: 2, short: "PWR SPLY ERR", full: "Problems with power supply" },
     "2:A9": { level: 2, short: "SET.CANCELED", full: "Setting could not be performed" },
-    "2:B8": { level: 2, short: "NO CONFIRM.", full: "A setting, alarm limit or ventilation mode was changed, but the change was not confirmed. If necessary, the user can adjust and confirm the setting again with the rotary knob." },
+    "2:B8": { level: 3, short: "NO CONFIRM.", full: "A setting, alarm limit or ventilation mode was changed, but the change was not confirmed. If necessary, the user can adjust and confirm the setting again with the rotary knob." }, // 實機 P8 = Low
     "2:BA": { level: 2, short: "PMIN REACHED", full: "Delivered volume greater set tidal volume due to minimum required PIP" },
     "2:D1": { level: 2, short: "HOSE ERROR", full: "Hose system defect" },
     "2:D7": { level: 2, short: "WRONG HOSES?", full: "Hoses incompatible?" },
@@ -119,14 +132,16 @@ const RMAlarm = (() => {
     "2:F8": { level: 2, short: "TIDAL VOL LO", full: "Tidal volume < low Limit" },
   };
 
-  /** alarm: {cp, code, prio, text}（見 PROTOCOL.md）→ {level, name}；name 用 full（跟呼吸器
-   * 螢幕上顯示的名稱較接近），查無對照時退回裝置原始縮寫文字 */
+  /** alarm: {cp, code, prio, text}（見 PROTOCOL.md）→ {level, name}；有效 prio 決定 level，
+   * name 使用完整名稱。prio 無效時才退回表內 level；代碼也查無時保守歸入 level 2。 */
   function classify(alarm) {
     const hit = TABLE[`${alarm.cp}:${alarm.code}`];
-    return hit
-      ? { level: hit.level, name: hit.full }
-      : { level: DEFAULT_LEVEL, name: alarm.text || alarm.code || "ALARM" };
+    const priorityLevel = levelFromPriority(alarm.prio);
+    return {
+      level: priorityLevel !== null ? priorityLevel : (hit ? hit.level : DEFAULT_LEVEL),
+      name: hit ? hit.full : (alarm.text || alarm.code || "ALARM"),
+    };
   }
 
-  return { classify, DEFAULT_LEVEL, TABLE };
+  return { classify, levelFromPriority, DEFAULT_LEVEL, TABLE };
 })();
