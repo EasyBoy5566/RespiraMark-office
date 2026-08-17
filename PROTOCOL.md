@@ -17,12 +17,13 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 - 兩端 TLS 設定必須一致：伺服器開了 TLS，未開 TLS 的 Pi 會連不上（反之亦然）。
 - `ingest_token` 規則不變，與 TLS 疊加使用（TLS 管加密與伺服器身分，token 管「誰可以送資料」）。
 
-**瀏覽器登入**（`auth_enabled`，預設啟用）：`/`、`/ws`、`/history/*`、`/api/me` 皆需登入 session（HttpOnly cookie；閒置逾時 `session_idle_minutes`，0 = 不逾時）。角色分 `viewer`（看板）與 `admin`（含管理頁）。驗證為可抽換介面（`monitor/web/auth.py` 的 `AuthManager` 依賴注入 authenticator），由 `config.json` 的 `auth_backend` 決定：
+**瀏覽器登入**（`auth_enabled`，預設啟用）：`/`、`/ws`、`/history/*`、`/api/me` 皆需登入 session（HttpOnly cookie；閒置逾時 `session_idle_minutes`，絕對逾時 `session_absolute_hours`，0 = 不逾時）。角色分 `viewer`（看板）與 `admin`（含管理頁）。
 
-- `"local"`（預設）：帳號存伺服器 `accounts.json`（**不進 git**；`tools/make_user.py` 建立/刪除，密碼僅存 PBKDF2 雜湊）。本系統**不提供改密碼功能**（自助改密碼與管理員重設皆無），忘記密碼須管理員在伺服器重新執行 `tools/make_user.py`。
-- `"ldap"`：登入時把帳密現場交給醫院 LDAP/AD 做一次 bind 驗證，密碼完全不落地本機，改密碼請走醫院 HIS 既有流程（見 `monitor/web/ldap_auth.py` 開頭說明）。角色（viewer/admin）仍由本機 `accounts.json` 的白名單決定（`password` 欄位此模式下不會被讀取），不是由 AD 群組決定。相關設定：`ldap_server`（如 `ldaps://ad.example.org`）、`ldap_bind_template`（如 `"{username}@example.org"`）、`ldap_use_ssl`、`ldap_ca`（院內 CA 根憑證檔——設定後 ldaps 連線以 `CERT_REQUIRED` 驗證 AD 伺服器憑證，防冒充；未設定則只加密不驗證並於啟動時警告，**正式環境必填**）、`ldap_timeout`。LDAP 連不上一律視為驗證失敗（fail closed），不會退回本機密碼比對。
+帳號存伺服器 `accounts.json`（**不進 git**；`tools/make_user.py` 建立/刪除，密碼僅存 PBKDF2 雜湊）。本系統**不提供改密碼功能**（自助改密碼與管理員重設皆無），忘記密碼須管理員在伺服器重新執行 `tools/make_user.py`。
 
-連續登入失敗會暫時鎖定該來源 IP（兩種 backend 皆適用）。
+驗證為可抽換介面：`monitor/web/auth.py` 的 `AuthManager` 以依賴注入接收 authenticator，只要求 `authenticate(username, password) -> role | None`、`has_users()`、`list_users()` 三個方法。**院方 2026-08-10 會議定案登入改走 HIS 帳號密碼**（LDAP 僅供院內個人服務，不適用本系統），介接規格待資訊室提供；屆時只需新增一個實作上述三方法的驗證器並在 `main.py` 的 `build_authenticator()` 選用，登入頁、session、middleware 皆不需更動。原 LDAP/AD 實作已於 2026-08-11 移除。
+
+連續登入失敗會暫時鎖定（同一 IP＋帳號 5 次、同一 IP 對任意帳號 20 次，鎖定 15 分鐘；對應資通系統防護基準第 42 點）。
 
 | 端點 | 說明 |
 |---|---|
@@ -51,9 +52,11 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 |---|---|
 | `GET /api/alarm-history/{device}?limit=50` | 查看該裝置最近警報 episode（新到舊，最多 100 筆），回傳 `episodes`；狀態為 `active`／`cleared`／`unknown`（離線或重啟時無法確認真正解除點），供單床詳細監測畫面顯示；不含病人代碼 |
 
-## 裝置配對（HTTP :8080，取得 `hello` 用的 token）
+## 裝置配對（走網頁 port，取得 `hello` 用的 token）
 
-新裝置佈建用：**Pi 端輸入伺服器位址送出配對申請 → 管理員在 `/admin` 核可 → Pi 自動領取 token 並寫入自己的 `telemetry.json`**，全程不需要人工複製貼上 token（`tools/make_device.py` 保留為 fallback）。走 HTTP :8080，**TCP 8765 的 ingest 協議完全不動**（它是純單向串流，不回傳任何資料）。
+新裝置佈建用：**Pi 端輸入伺服器位址送出配對申請 → 管理員在 `/admin` 核可 → Pi 自動領取 token 並寫入自己的 `telemetry.json`**，全程不需要人工複製貼上 token（`tools/make_device.py` 保留為 fallback）。**TCP 8765 的 ingest 協議完全不動**（它是純單向串流，不回傳任何資料）。
+
+配對走的是網頁 port（`config.json` 的 `web_port`：醫院部署 HTTPS 443、未開 TLS 的開發環境 HTTP 8080）。伺服器啟用 TLS 時**配對也走 HTTPS**：Pi 端 `telemetry.json` 要先填好 `tls: true` 與 `tls_ca`（院內 CA 根憑證，與遙測連線共用同一份），憑證驗不過一律拒絕、不會退回明文重試。Pi 端的 `web_port` 留 `0` 即依 TLS 與否取 443／8080，伺服器用其他 port 時才需明填。
 
 ```
 Pi ──POST /api/pair/request──▶ 伺服器（產生 pair_id + 6 位確認碼）

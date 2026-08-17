@@ -359,20 +359,23 @@ def should_register_local(args):
     )
 
 
-def run_pairing(host: str, web_port: int, device: str):
+def run_pairing(host: str, web_port: int, device: str, tls_ca: str = ""):
     """模擬 Pi 端的配對申請，讓開發者不用真機也能演練 /admin 的核可畫面。
 
     刻意不共用 respiramark-pi 的 pairing.py（兩個專案彼此獨立，唯一的耦合是
     PROTOCOL.md）；這裡只是最精簡的協議實作，不含 Pi 端的重試與狀態機。
+
+    給了 --tls-ca 就走 https 並以該 CA 驗證伺服器憑證，與真機一致。
     """
-    base = f"http://{host}:{web_port}"
+    ctx = ssl.create_default_context(cafile=tls_ca) if tls_ca else None
+    base = f"{'https' if ctx else 'http'}://{host}:{web_port}"
 
     def call(path, payload=None):
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(
             base + path, data=data, method="POST" if data else "GET",
             headers={"Content-Type": "application/json"} if data else {})
-        with urllib.request.urlopen(req, timeout=5.0) as r:
+        with urllib.request.urlopen(req, timeout=5.0, context=ctx) as r:
             return json.loads(r.read().decode("utf-8"))
 
     try:
@@ -443,12 +446,14 @@ def main():
     ap.add_argument("--pair", action="store_true",
                     help="不送波形，改走裝置配對流程：申請 → 顯示確認碼 → 等管理員在 "
                          "/admin 核可 → 印出領到的 token（供演練配對 UI）")
-    ap.add_argument("--web-port", type=int, default=8080,
-                    help="--pair 用的網頁 port（伺服器 config.json 的 web_port）")
+    ap.add_argument("--web-port", type=int, default=0,
+                    help="--pair 用的網頁 port（伺服器 config.json 的 web_port）；"
+                         "省略時依有無 --tls-ca 取 443 或 8080")
     args = ap.parse_args()
 
     if args.pair:
-        run_pairing(args.host, args.web_port, args.device)
+        web_port = args.web_port or (443 if args.tls_ca else 8080)
+        run_pairing(args.host, web_port, args.device, args.tls_ca)
         return
 
     if (not math.isfinite(args.alarm_interval_min)

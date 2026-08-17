@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 from urllib.parse import urlparse
 
@@ -216,11 +217,40 @@ async def _ws_sender(ws, q: asyncio.Queue):
         pass
 
 
+@web.middleware
+async def error_middleware(request, handler):
+    """未預期例外 → 對外只回簡短訊息與代碼，完整 traceback 只進伺服器日誌。
+
+    對應資通系統防護基準第 55 點「發生錯誤時，使用者頁面僅顯示簡短錯誤訊息
+    及代碼，不包含詳細之錯誤訊息」。`web.HTTPException` 是各 handler 刻意回覆
+    的狀態（401/403/404/409…），照原樣放行；只有真的沒人接的例外才轉成 500。
+
+    代碼是每次現產的隨機字串，同一筆錯誤在回應與伺服器日誌各出現一次——
+    使用者回報代碼即可在日誌定位，而回應本身不洩漏任何內部細節。
+    """
+    try:
+        return await handler(request)
+    except (web.HTTPException, asyncio.CancelledError):
+        raise                                    # 刻意的回應 / 正常取消，不攔
+    except Exception:
+        code = secrets.token_hex(4)
+        # 只記方法與路徑：本專案路徑不含病人代碼（CLAUDE.md §2.2 紅線）
+        logging.getLogger("web").exception(
+            f"未預期例外 [{code}] {request.method} {request.path}")
+        raise web.HTTPInternalServerError(
+            text=json.dumps({"error": "系統發生錯誤，請聯絡管理員", "code": code},
+                            ensure_ascii=False),
+            content_type="application/json")
+
+
 def create_app(hub, authmgr=None, tls_enabled=False, pairing=None) -> web.Application:
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     # security_headers 排最外層：auth_middleware 的 401/403/redirect 多半是
-    # raise HTTPException 而非 return，要包在外面才能連這些回應也補上標頭
-    app = web.Application(middlewares=[security_headers_middleware, auth_middleware])
+    # raise HTTPException 而非 return，要包在外面才能連這些回應也補上標頭；
+    # error_middleware 夾在中間——它把未預期例外轉成 HTTPException，正好讓
+    # 外層補上安全標頭（否則 500 會是唯一漏掉標頭的回應）
+    app = web.Application(middlewares=[security_headers_middleware,
+                                       error_middleware, auth_middleware])
     app["hub"] = hub
     app["authmgr"] = authmgr                     # None = 登入未啟用（開發模式）
     app["tls_enabled"] = tls_enabled

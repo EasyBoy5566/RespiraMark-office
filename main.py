@@ -14,12 +14,13 @@ RespiraMark Office — 中央監視儀表板 進入點
 
 import argparse
 import asyncio
+import datetime
 import logging
 import os
 import socket
 import ssl
 import sys
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from monitor.domain.device_directory import DeviceDirectory
@@ -28,7 +29,6 @@ from monitor.domain.pairing import PairingService
 from monitor.transport.device_auth import DeviceRegistry
 from monitor.transport.ingest import start_ingest
 from monitor.web.auth import AuthManager, LocalAuthenticator
-from monitor.web.ldap_auth import LdapAuthenticator
 from monitor.web.routes import start_web
 
 
@@ -65,16 +65,12 @@ def build_ssl_context(cfg: dict):
 
 
 def build_authenticator(cfg: dict):
-    """依 auth_backend 建立驗證器（local=預設／ldap=院內 LDAP/AD，見 W-307）"""
-    backend = str(cfg.get("auth_backend") or "local").lower()
-    if backend == "ldap":
-        return LdapAuthenticator(
-            server_uri=str(cfg.get("ldap_server") or ""),
-            bind_template=str(cfg.get("ldap_bind_template") or "{username}"),
-            roles_path=_resolve(str(cfg.get("accounts_file") or "accounts.json")),
-            use_ssl=bool(cfg.get("ldap_use_ssl", True)),
-            timeout=float(cfg.get("ldap_timeout") or 5.0),
-            ca_certs_file=_resolve(str(cfg.get("ldap_ca") or "")))
+    """建立帳密驗證器。
+
+    目前只有本機 accounts.json 一種；院方定案登入改走 HIS，介接規格到手後
+    在這裡多建一種驗證器即可（AuthManager 只認 authenticate()/has_users()/
+    list_users() 介面，其餘程式不用動）。
+    """
     return LocalAuthenticator(_resolve(str(cfg.get("accounts_file") or "accounts.json")))
 
 
@@ -84,50 +80,79 @@ def build_auth_manager(cfg: dict, tls_on: bool):
     if not cfg.get("auth_enabled"):
         log.warning("登入驗證未啟用（auth_enabled=false）——僅限開發環境使用")
         return None
-    authenticator = build_authenticator(cfg)
-    mgr = AuthManager(authenticator,
+    mgr = AuthManager(build_authenticator(cfg),
                       idle_minutes=float(cfg.get("session_idle_minutes") or 0),
                       secure_cookie=tls_on,
                       absolute_hours=float(cfg.get("session_absolute_hours") or 0),
                       max_sessions=int(cfg.get("session_max") or 200))
     if not mgr.has_users():
-        backend = str(cfg.get("auth_backend") or "local").lower()
-        hint = ("請先執行 python tools/make_user.py --user <帳號> --role admin"
-               if backend != "ldap" else
-               "請先在 accounts.json 加入至少一筆 {\"username\":...,\"role\":...}"
-               "（LDAP 模式不需要 password 欄位，帳密驗證交給 LDAP）")
-        log.warning(f"帳號/角色名單尚無任何項目，目前無人能登入——{hint}")
+        log.warning("帳號名單尚無任何項目，目前無人能登入——"
+                    "請先執行 python tools/make_user.py --user <帳號> --role admin")
     return mgr
 
 
+class LocalIsoFormatter(logging.Formatter):
+    """時戳寫成含時區位移的 ISO 8601（例如 `2026-08-11T14:23:05+08:00`）。
+
+    資通系統防護基準第 24 點要求日誌時戳「可以對應到世界協調時間(UTC)」：
+    只記本地時刻而不帶位移，事後跨系統比對無從還原成 UTC，跨日光節約或
+    換時區的機器更會直接對不上。改用 datetime.astimezone() 取本機位移，
+    不依賴各平台 strftime 對 %z 的實作差異（Windows 的 %z 會回時區名稱，
+    不是數字位移）。
+    """
+
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.datetime.fromtimestamp(record.created).astimezone()
+        return dt.isoformat(timespec="seconds")
+
+
+def _daily_log_handler(path: str, fmt: str, retention_days: int):
+    """每日輪替、保留 retention_days 天的 UTF-8 檔案 handler。
+
+    改用日期輪替（原本是 10MB×5 的大小輪替）的原因：防護基準第 16 點要求
+    日誌「保留至少 6 個月」，而大小輪替只保證留下最近 50MB，日誌一忙就會把
+    幾個月前的紀錄擠掉，無法對稽核交代保存期限。
+    檔案一律 UTF-8——主控台在 cp950 語系 Windows 下印中文常亂碼，但寫檔
+    不受主控台編碼影響（對應 IMPROVEMENT_PLAN.md F-06）。
+    """
+    handler = TimedRotatingFileHandler(path, when="midnight",
+                                       backupCount=retention_days,
+                                       encoding="utf-8")
+    handler.setFormatter(LocalIsoFormatter(fmt))
+    return handler
+
+
+def _log_retention_days(cfg: dict) -> int:
+    """保留天數；低於 180 天（6 個月）視為設定錯誤，拉回下限並警告。"""
+    days = int(cfg.get("log_retention_days") or 190)
+    if days < 180:
+        logging.getLogger("main").warning(
+            f"log_retention_days={days} 低於資通系統防護基準要求的 6 個月，已改用 180")
+        return 180
+    return days
+
+
 def setup_server_log(cfg: dict):
-    """一般運行 log 同步寫檔 `logs/server.log`（10MB×5 輪替，UTF-8）；
-    主控台照印不受影響。掛在 root logger，涵蓋 hub/ingest/auth/main 等
-    全部既有 logger。檔案一律 UTF-8——主控台在 cp950 語系 Windows 下
-    印中文常亂碼，但寫檔不受主控台編碼影響（對應 IMPROVEMENT_PLAN.md F-06）。"""
+    """一般運行 log 同步寫檔 `logs/server.log`；主控台照印不受影響。
+    掛在 root logger，涵蓋 hub/ingest/auth/main 等全部既有 logger。"""
     log_dir = _resolve(str(cfg.get("log_dir") or "logs"))
     os.makedirs(log_dir, exist_ok=True)
-    handler = RotatingFileHandler(os.path.join(log_dir, "server.log"),
-                                  maxBytes=10 * 1024 * 1024, backupCount=5,
-                                  encoding="utf-8")
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S"))
-    logging.getLogger().addHandler(handler)
+    logging.getLogger().addHandler(_daily_log_handler(
+        os.path.join(log_dir, "server.log"),
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        _log_retention_days(cfg)))
 
 
 def setup_audit_log(cfg: dict):
-    """掛上審計日誌的檔案 handler（logs/audit.log，10MB×5 輪替，UTF-8）。
+    """掛上審計日誌的檔案 handler（logs/audit.log）。
     只寫檔、不印主控台（避免跟一般運行 log 混在一起）；
     monitor/audit.py 的 audit() 呼叫最終都會經由這個 handler 落地。"""
     log_dir = _resolve(str(cfg.get("log_dir") or "logs"))
     os.makedirs(log_dir, exist_ok=True)
-    handler = RotatingFileHandler(os.path.join(log_dir, "audit.log"),
-                                  maxBytes=10 * 1024 * 1024, backupCount=5,
-                                  encoding="utf-8")
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     audit_logger = logging.getLogger("audit")
-    audit_logger.addHandler(handler)
+    audit_logger.addHandler(_daily_log_handler(
+        os.path.join(log_dir, "audit.log"), "%(asctime)s %(message)s",
+        _log_retention_days(cfg)))
     audit_logger.setLevel(logging.INFO)
     audit_logger.propagate = False
 
@@ -212,9 +237,8 @@ async def main():
             log.warning("目前是單一共用 ingest_token 模式：第一次核可配對會建立 devices.json "
                         "並切換成每台獨立驗證，屆時未登記的舊裝置重連會被拒絕")
         if ssl_ctx is not None:
-            # 目前 Pi 端配對客戶端只講明文 HTTP（純標準庫，手上也還沒有院內 CA 憑證）
-            log.warning("TLS 已啟用：Pi 端配對客戶端連不上 HTTPS，新裝置請改用 "
-                        "tools/make_device.py 手動核發")
+            log.info("TLS 已啟用：Pi 端配對走 HTTPS，該台 telemetry.json 需先填好 "
+                     "tls=true 與 tls_ca（院內 CA 根憑證），否則配對會因憑證驗證失敗被拒")
 
     # 組裝三層
     hub = TelemetryHub(offline_timeout=float(cfg["offline_timeout"]),

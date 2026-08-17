@@ -165,7 +165,7 @@ Pi #1..#16 ──TCP :8765（JSON Lines，TLS 可選，共用 token）──▶ 
 | W-304 | 裝置離線醒目提醒（G-05）：離線卡片改高對比警示樣式 + ~~可選提示音~~。**2026-07-17 變更**：你決定離線**不出聲**（提示音整組移除，含 header 開關），聲音改為**呼吸器警報音**——呼吸器發出 level 1/2 警報時鳴響（level 1 三連短高音/2.5s、level 2 兩連低音/5s，取全場最嚴重者），靜音鈕放在該卡片警報列（只靜音該台；警報全數解除自動復歸；Pi 離線不鳴響）。**對外通知（LINE/Email）觸犯資料不出院內網紅線，不在本計畫內**，日後有需求另案討論 | app.js/style.css/index.html | T-304：fake_pi Ctrl+C 後 5 秒內卡片變警示樣式（無聲）；`fake_pi.py --alarms` 有聲、卡片靜音鈕只靜音該台 | S |
 | W-305 | （選做，醫院穩定後再議）歷史波形/參數儲存與回放：`domain/storage.py`（SQLite）+ 查詢 API + 回放前端。涉及臨床資料落地，動工前需先確認院方資料保存政策與加密要求 | — | — | L |
 | W-306 | 版本資訊（G-06）：header 或登入頁顯示版本號（同 /healthz 的 version） | 前端小改 | T-306：畫面版本 = git tag | S |
-| W-307 | ✅ **已完成**（2026-07-07 你已核准新增 `ldap3` 相依）**院內帳號整合（LDAP/AD 單一密碼來源）**：比照 MAYA(RCS) 的作法——登入時把帳密交給醫院集中帳號系統（LDAP / Active Directory）驗證，本系統不再自己存密碼；密碼從醫院 HIS/AD 端改，這裡立刻生效。設計見本文件下方「六之一、LDAP/AD 帳號整合說明」。`monitor/web/ldap_auth.py`（`LdapAuthenticator`）＋ `monitor/web/auth.py` 改依賴注入（`AuthManager` 不再寫死 `LocalAuthenticator`）＋ `config.json` 新增 `auth_backend`（`local`/`ldap`）等欄位；**預設仍是 `local`**，`ldap` 模式待資訊室提供實際伺服器/DN 格式後只需改設定檔即可切換，不用改程式碼。**2026-07-17 補強**：新增 `ldap_ca` 設定——ldaps 連線改以院內 CA 根憑證驗證 AD 伺服器憑證（`CERT_REQUIRED`；未設定維持只加密不驗證並於啟動時警告，正式環境必填） | `monitor/web/ldap_auth.py`、`monitor/web/auth.py`、`main.py`、`monitor/config.py` | T-307：`tests/test_ldap_auth.py`（8 項，`ldap3` MOCK_SYNC 模擬 bind 成功/失敗/未知帳號/不在白名單/空密碼等情況）全數通過；`ldap3==2.9.1` 已鎖定版本，僅 `auth_backend=ldap` 時需要安裝 | M |
+| W-307 | ❌ **2026-08-11 已作廢並移除**（資訊室會議定案改走 HIS，見第七節開頭說明；以下為原始紀錄）~~✅ 已完成（2026-07-07 你已核准新增 `ldap3` 相依）~~**院內帳號整合（LDAP/AD 單一密碼來源）**：比照 MAYA(RCS) 的作法——登入時把帳密交給醫院集中帳號系統（LDAP / Active Directory）驗證，本系統不再自己存密碼；密碼從醫院 HIS/AD 端改，這裡立刻生效。設計見本文件下方「六之一、LDAP/AD 帳號整合說明」。`monitor/web/ldap_auth.py`（`LdapAuthenticator`）＋ `monitor/web/auth.py` 改依賴注入（`AuthManager` 不再寫死 `LocalAuthenticator`）＋ `config.json` 新增 `auth_backend`（`local`/`ldap`）等欄位；**預設仍是 `local`**，`ldap` 模式待資訊室提供實際伺服器/DN 格式後只需改設定檔即可切換，不用改程式碼。**2026-07-17 補強**：新增 `ldap_ca` 設定——ldaps 連線改以院內 CA 根憑證驗證 AD 伺服器憑證（`CERT_REQUIRED`；未設定維持只加密不驗證並於啟動時警告，正式環境必填） | `monitor/web/ldap_auth.py`、`monitor/web/auth.py`、`main.py`、`monitor/config.py` | T-307：`tests/test_ldap_auth.py`（8 項，`ldap3` MOCK_SYNC 模擬 bind 成功/失敗/未知帳號/不在白名單/空密碼等情況）全數通過；`ldap3==2.9.1` 已鎖定版本，僅 `auth_backend=ldap` 時需要安裝 | M |
 
 **Phase 3 完成定義**：G-01、G-02、G-04、G-05 關閉；打 tag `v1.0.0-rc1`。
 
@@ -260,7 +260,19 @@ W-305（歷史波形回放）依計畫維持選做、不做。
 
 ---
 
-## 七、LDAP/AD 帳號整合設計說明（對應 W-307，已於 2026-07-07 實作完成）
+## 七、~~LDAP/AD 帳號整合設計說明~~（W-307，**2026-08-11 已作廢並移除實作**）
+
+> ⚠️ **本節已作廢，僅保留作為 HIS 介接討論的背景資料。**
+> 2026-08-10 與資訊室第一次會議定案：**使用者登入改走 HIS 帳號密碼**，理由是院方
+> LDAP 僅提供給「院內個人服務」使用，不適用本系統；HIS 的登入介接方式待資訊室
+> 提供文件與教學。據此於 2026-08-11 移除 `monitor/web/ldap_auth.py`、
+> `tests/test_ldap_auth.py`、`ldap3` 相依與 `auth_backend`／`ldap_*` 設定欄位
+> （專案仍在建置階段，不需向下相容）。
+>
+> **保留下來的是抽象化本身**：`AuthManager` 仍以依賴注入接收 authenticator，
+> HIS 規格到手後只需新增一個實作 `authenticate()`／`has_users()`／`list_users()`
+> 的類別並在 `main.py` 的 `build_authenticator()` 選用。下方 7.1 對「集中帳號目錄
+> 現場驗證」的原理說明，對 HIS 介接的討論仍然適用。
 
 ### 7.1 原理：MAYA(RCS) 為什麼改 HIS 密碼就能生效？
 

@@ -6,17 +6,16 @@
 
 設計：
 - 密碼只存 PBKDF2-SHA256 雜湊（accounts.json，不進 git；tools/make_user.py 建立）；
-  本應用**不提供改密碼功能**——密碼由 tools/make_user.py（本機模式）或院內
-  HIS/AD（LDAP 模式，見 monitor/web/ldap_auth.py）管理，改了立刻生效
+  本應用**不提供改密碼功能**——密碼由 tools/make_user.py 管理，改了立刻生效
 - session 存伺服器記憶體：cookie 只是隨機權杖，本身不含任何資訊；
   閒置逾時（sliding）由 SessionStore 判斷，0 = 不逾時（護理站看板用）
 - 「驗證帳密」隔離成 Authenticator 介面：AuthManager 用依賴注入接收
-  authenticator（LocalAuthenticator 或 LdapAuthenticator），實作同名方法
-  authenticate(username, password) -> role | None，登入頁、session、
-  middleware 全部不用管是哪一種
-- 連續登入失敗 → 暫時鎖定該來源 IP（基本暴力破解防護）
-- 純標準庫 + aiohttp（遵守 CLAUDE.md §2.3 相依規則；LDAP 模式額外用 ldap3，
-  只有選用該模式時才需要安裝，見 requirements.txt 說明）
+  authenticator，只要求它實作 authenticate(username, password) -> role | None、
+  has_users()、list_users()，登入頁、session、middleware 全部不用管是哪一種。
+  院方定案登入改走 HIS（見 main.py 的 build_authenticator）——規格到手後
+  只要多一個實作這三個方法的類別，本模組不用改
+- 連續登入失敗 → 暫時鎖定（基本暴力破解防護，見下方 FAIL_* 常數）
+- 純標準庫 + aiohttp（遵守 CLAUDE.md §2.3 相依規則）
 """
 
 import asyncio
@@ -54,8 +53,12 @@ PAGE_PATHS = {"/", "/admin"}
 # 另外用同一 IP 對「任意帳號」的失敗總數設較高上限，擋住同一來源對
 # 多個帳號亂猜的情境；只鎖單一(IP,帳號)則不會誤傷共用同一台電腦/
 # 出口 IP 的其他使用者嘗試登入自己的帳號（F-08）。
-FAIL_WINDOW = 600.0     # 秒
-FAIL_MAX = 5            # 同一 (IP, 帳號) 上限
+#
+# 視窗長度＝實際鎖定時間：連續失滿 FAIL_MAX 次後，要等最舊那次失敗滑出
+# 視窗才會解鎖。資通系統防護基準第 42 點要求「失敗達 5 次後，至少 15 分鐘
+# 內不允許繼續嘗試」，因此視窗不得短於 900 秒。
+FAIL_WINDOW = 900.0     # 秒（＝15 分鐘，防護基準 42 的下限）
+FAIL_MAX = 5            # 同一 (IP, 帳號) 上限（防護基準 42 指定 5 次）
 FAIL_MAX_IP = 20        # 同一 IP 對任意帳號的總上限
 
 
@@ -66,9 +69,8 @@ _DUMMY_HASH = hash_password("dummy-timing-equalizer")
 class LocalAuthenticator:
     """本機帳號檔驗證（accounts.json）。
 
-    LDAP/AD 模式見 monitor/web/ldap_auth.py 的 LdapAuthenticator，
-    實作同名方法 authenticate(username, password) -> role 字串或 None，
-    main.py 依 config.json 的 auth_backend 選用，其餘程式不動。
+    目前唯一的驗證器；未來的 HIS 驗證器實作同樣三個方法即可替換
+    （見本檔開頭設計說明與 main.py 的 build_authenticator）。
     """
 
     def __init__(self, accounts_path: str):
@@ -208,8 +210,7 @@ SWEEP_INTERVAL = 300.0     # 秒，session 定期清掃間隔（F-09：長年運
 class AuthManager:
     """登入功能的組裝：驗證器 + session + 限流 + HTTP handler。
 
-    authenticator 用依賴注入傳入（LocalAuthenticator 或 LdapAuthenticator，
-    見 main.py 的 build_auth_manager 依 config.json 的 auth_backend 選用），
+    authenticator 用依賴注入傳入（見 main.py 的 build_authenticator），
     本類別不關心是哪一種、只呼叫共同介面 authenticate()/has_users()/list_users()。
     """
 

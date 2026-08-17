@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## 未發布 — 資訊室會議定案的合規調整（2026-08-11）
+
+依 2026-08-10 與中山附醫資訊室第一次會議決議，以及院方「資通系統防護需求等級
+評估表及防護基準表」（227000-000-F-032）的中級適用項目調整：
+
+- **移除 LDAP/AD 帳密驗證**：會議定案登入改走 **HIS 帳號密碼**（院方 LDAP 僅供
+  院內個人服務，不適用本系統）。刪除 `monitor/web/ldap_auth.py`、
+  `tests/test_ldap_auth.py`、`ldap3` 相依，以及 `auth_backend`／`ldap_*` 設定欄位。
+  **保留驗證器的依賴注入抽象**——HIS 介接規格到手後，只需新增一個實作
+  `authenticate()`／`has_users()`／`list_users()` 的類別並在 `main.py` 的
+  `build_authenticator()` 選用，登入頁、session、middleware 都不用動
+- **登入鎖定時間 10 分鐘 → 15 分鐘**（防護基準 42 要求失敗 5 次後至少鎖 15 分鐘）
+- **日誌時戳改 ISO 8601 含時區位移**（防護基準 24 要求可對應 UTC）：原本
+  `server.log` 只有 `%H:%M:%S`、連日期都沒有，跨日就分不出是哪天；`audit.log`
+  雖有日期但無時區位移，跨系統比對無從還原成 UTC
+- **日誌改每日輪替、保留 190 天**（防護基準 16 要求正式系統保留至少 6 個月）：
+  原本是 10MB×5 的大小輪替，只保證留最近 50MB，日誌一忙就會把幾個月前的紀錄
+  擠掉。新增 `log_retention_days` 設定，低於 180 會被拉回下限並於啟動時警告
+- **未預期例外收斂**（防護基準 55）：新增 `error_middleware`，對外只回簡短訊息
+  與一組隨機代碼，完整 traceback 只進伺服器日誌；代碼供使用者回報後定位。
+  它刻意排在 `security_headers_middleware` 內層，讓 500 也帶得到安全標頭
+  （原本 500 是唯一漏掉安全標頭的回應）
+- **`config.json.example` 的 `web_port` 改 443**：醫院 VM 部署走 HTTPS 443 ＋
+  ingest 8765（已填入資訊室申請表的服務埠欄）。程式**預設值仍是 8080**——443 是
+  HTTPS 慣用埠，只有同時設定 `tls_cert`/`tls_key` 才該使用，預設不開 TLS 的開發
+  環境若也用 443 會變成在 443 上跑明文
+- **裝置配對支援 TLS**：Pi 端配對客戶端原本只講明文 HTTP，伺服器一開 TLS 就配不了
+  對（只能退回 `tools/make_device.py` 手動核發）。現在給了 CA 就走 HTTPS 並驗證伺服器
+  憑證，憑證驗不過一律拒絕、不會退回明文重試；憑證錯誤與連不上分開提示，現場才查得
+  下去。`tools/fake_pi.py --pair` 同步支援 `--tls-ca`，可無真機演練 TLS 配對
+- 新增 `tests/test_error_middleware.py`（6 項）與 `tests/test_log_setup.py`（6 項）
+  鎖住上述合規行為；全套 125 項與 `smoke_test.py` 通過
+
 ## 未發布 — 警報依實機優先值分級
 
 - Office 警報改以 Pi 實際回報的 MEDIBUS `prio` 判級：P25～31 為 level 1、P11～24 為

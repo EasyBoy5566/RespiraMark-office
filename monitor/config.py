@@ -13,7 +13,10 @@ DEFAULT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config.json")
 
 DEFAULTS = {
     "ingest_port": 8765,      # Pi 連入的 TCP port
-    "web_port": 8080,         # 瀏覽器網頁 port
+    # 瀏覽器網頁 port。預設 8080 是「未啟用 TLS 的開發環境」用值；醫院部署一律
+    # 走 443（HTTPS），見 config.json.example——443 是 HTTPS 慣用埠，只有同時
+    # 設定 tls_cert/tls_key 才該使用，否則會變成在 443 上跑明文。
+    "web_port": 8080,
     "offline_timeout": 5.0,   # 秒，無資料判定裝置離線
     "ingest_token": "",       # Pi 連入的存取權杖（單一共用，退回模式）；空字串 = 不驗證（僅限開發環境）
     "devices_file": "devices.json",  # 每台裝置獨立權杖檔（配對流程或 tools/make_device.py 建立）；不存在則退回 ingest_token
@@ -31,6 +34,9 @@ DEFAULTS = {
     "sys_history_max": 720,
     # 所有日誌的統一根目錄；下列相對路徑都從此處解析
     "log_dir": "logs",
+    # server.log／audit.log 每日輪替後的保留天數。資通系統防護基準第 16 點要求
+    # 正式系統日誌保留至少 6 個月，低於 180 會被 main.py 拉回下限並警告。
+    "log_retention_days": 190,
     # Pi 系統狀態 SQLite（空字串 = 不落地，只留記憶體歷史）
     "sys_db_path": "sys_logs/sys_history.sqlite3",
     # 秒，SQLite 寫入節流間隔；不影響即時畫面/記憶體歷史
@@ -44,19 +50,15 @@ DEFAULTS = {
     "tls_cert": "",           # 伺服器憑證，例如 "certs/server.pem"（相對專案根目錄）
     "tls_key": "",            # 伺服器私鑰，例如 "certs/server.key"
     # ── 瀏覽器登入（tools/make_user.py 建帳號；停用僅限開發環境）──
+    # 帳密驗證來源目前只有本機 accounts.json。院方 2026-08-10 會議定案改走
+    # HIS 帳號密碼（LDAP 僅供院內個人服務，不適用本系統），介接規格待資訊室
+    # 提供；屆時新增一個實作 authenticate()/has_users()/list_users() 的驗證器
+    # 注入 AuthManager 即可，其餘程式不動（見 monitor/web/auth.py 設計說明）。
     "auth_enabled": True,
     "accounts_file": "accounts.json",
     "session_idle_minutes": 30.0,   # 閒置逾時（sliding）自動登出；0 = 不逾時（護理站看板用）
     "session_absolute_hours": 12.0,  # 登入後最長可用時數，即使一直有操作也會過期；0 = 不限（看板帳號用）
     "session_max": 200,        # session 總量上限，超過淘汰最久沒動作的一筆
-    # ── 帳密驗證來源（W-307；local=本機 accounts.json，ldap=院內 LDAP/AD）──
-    "auth_backend": "local",
-    "ldap_server": "",             # 例如 "ldaps://ad.csh.org.tw"（含 scheme；用 ldaps:// 走加密）
-    "ldap_bind_template": "{username}@example.com",  # 帳號套進這個樣板直接當 bind DN，例如 UPN 格式
-    "ldap_use_ssl": True,
-    "ldap_ca": "",                 # 院內 CA 根憑證檔，例如 "certs/hospital-ca.pem"——用來驗證 AD 伺服器憑證；
-                                   # 空字串 = 只加密不驗證（啟動時會警告），正式環境必填
-    "ldap_timeout": 5.0,           # 秒，LDAP 連線/驗證逾時
 }
 
 

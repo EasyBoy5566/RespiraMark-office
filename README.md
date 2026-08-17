@@ -62,6 +62,10 @@ New-NetFirewallRule -DisplayName "RespiraMark ingest" -Direction Inbound -Protoc
 New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow
 ```
 
+醫院 VM 部署時 `web_port` 是 443，該台請改放行 443（`-LocalPort 443`）；院內防火牆的
+放行則走資訊室「系統建置說明」申請表的「網路訪問權限」欄——服務埠填 **443 ＋ 8765**，
+無線網段勾 **csh-device-s**（Pi 上傳）與 **csh-staff-s**（護理站看板）。
+
 ## 設定
 
 複製 `config.json.example` 為 `config.json` 修改（沒有此檔則用預設值）：
@@ -69,7 +73,7 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | 欄位 | 預設 | 說明 |
 |---|---|---|
 | `ingest_port` | 8765 | Pi 連入的 TCP port |
-| `web_port` | 8080 | 瀏覽器網頁 port |
+| `web_port` | 8080 | 瀏覽器網頁 port。預設值是未啟用 TLS 的開發環境用；**醫院部署填 443**（HTTPS 慣用埠，`config.json.example` 已是此值），且必須同時設定 `tls_cert`/`tls_key`，否則等於在 443 上跑明文 |
 | `offline_timeout` | 5.0 | 幾秒沒資料判定 Pi 離線 |
 | `ingest_token` | （空） | 單一共用存取權杖（`devices.json` 不存在時的退回模式）；設定後 Pi 端 telemetry.json 的 `token` 必須一致才能連入。空字串 = 不驗證（僅限開發環境，**部署前務必設定**） |
 | `devices_file` | `devices.json` | 每台裝置獨立權杖檔（配對流程或 `tools/make_device.py` 建立，見下）；存在時優先於 `ingest_token`，**建議部署醫院前改用此模式** |
@@ -82,6 +86,7 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `ingest_idle_timeout` | 60.0 | hello 通過後幾秒沒資料就斷線（Pi 每 2 秒 ping，留有餘裕） |
 | `max_viewers` | 50 | 同時瀏覽器觀看端數上限，超過拒絕新連線（503） |
 | `log_dir` | `logs` | 全部執行期日誌的統一根目錄；server/audit 文字日誌及 alarm/sys SQLite 都放在此目錄內 |
+| `log_retention_days` | 190 | `server.log`／`audit.log` 每日輪替後的保留天數；資通系統防護基準要求正式系統日誌保留至少 6 個月，低於 180 會被拉回下限並於啟動時警告 |
 | `sys_db_path` | `sys_logs/sys_history.sqlite3` | 相對 `log_dir` 的系統狀態 SQLite；所有機台共用，匯出時才產生 CSV |
 | `sys_persist_interval` | 60.0 | 系統狀態寫入 SQLite 的節流秒數，不影響即時畫面 |
 | `sys_retention_days` | 7 | 系統狀態保存天數 |
@@ -154,9 +159,9 @@ Windows 端用 `w32tm /query /status` 確認已同步，Pi 端用 `timedatectl` 
 **院內 CA 簽發憑證（部署醫院時建議走這條）**：若院方統一由資訊室簽發憑證（多數醫院
 如此，到期前會公告提醒申請），直接把核發的伺服器憑證與私鑰掛到 `tls_cert`/`tls_key`，
 並向資訊室索取**院內 CA 根憑證檔**（公開檔案）——發到每台 Pi 的 `telemetry.json`
-（`tls_ca`），以及本伺服器 `config.json` 的 `ldap_ca`（ldaps 驗證 AD 用）。申請伺服器
-憑證時用之後大家實際連的**內部 DNS 名稱**（SAN 建議一併含 IP）。此模式不需要
-`make_certs.py` 與 `ca.key`，下段僅適用自建 CA。
+（`tls_ca`）。申請伺服器憑證時用之後大家實際連的**內部 DNS 名稱**（本院定案為
+`ventmonitor.csh.org.tw`；SAN 建議一併含 IP）。此模式不需要 `make_certs.py` 與
+`ca.key`，下段僅適用自建 CA。
 
 **ca.key（CA 發證私鑰）**：`tools/make_certs.py` 產生的 `certs/ca.key` 不應該長駐伺服器
 ——簽完伺服器憑證後複製兩份到離線 USB，然後從伺服器上刪除；下次要重簽憑證（例如換

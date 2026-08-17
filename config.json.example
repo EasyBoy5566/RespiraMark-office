@@ -1,6 +1,6 @@
 {
     "ingest_port": 8765,
-    "web_port": 8080,
+    "web_port": 443,
     "offline_timeout": 5.0,
     "ingest_token": "",
     "devices_file": "devices.json",
@@ -14,6 +14,7 @@
     "max_viewers": 50,
     "sys_history_max": 720,
     "log_dir": "logs",
+    "log_retention_days": 190,
     "sys_db_path": "sys_logs/sys_history.sqlite3",
     "sys_persist_interval": 60.0,
     "sys_retention_days": 7,
@@ -25,11 +26,5 @@
     "accounts_file": "accounts.json",
     "session_idle_minutes": 30.0,
     "session_absolute_hours": 12.0,
-    "session_max": 200,
-    "auth_backend": "local",
-    "ldap_server": "ldaps://ad.example.org",
-    "ldap_bind_template": "{username}@example.org",
-    "ldap_use_ssl": true,
-    "ldap_ca": "certs/hospital-ca.pem",
-    "ldap_timeout": 5.0
+    "session_max": 200
 }
