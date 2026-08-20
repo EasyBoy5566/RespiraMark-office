@@ -287,24 +287,13 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .patient  { color: var(--text-secondary); font-size: 13px; }
 .spacer { flex: 1; }
 
-/* 狀態小方塊：標籤（灰）+ 狀態文字（依連線狀態上色），避免兩種狀態並排時看不出各自代表什麼 */
-.status-group {
-  display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--divider);
-  border-radius: 5px;
-  padding: 1px 8px;
-}
-.status-tag {
-  font-size: 11px; font-weight: bold;
-  color: var(--text-label);
-}
+/* Pi 與呼吸器之間的串口狀態（儀表板卡片與管理頁表格共用）。
+ * 管理頁的「伺服器連線」改用 .link-dot 那顆燈＋整列轉灰表示，
+ * 原本的 .status-group／.status-tag／.link-status 已無人使用，一併移除。 */
 .vent-status { font-size: 13px; font-weight: bold; color: var(--text-secondary); }
 .vent-status.connected    { color: var(--green); }
 .vent-status.connecting   { color: var(--amber); }
 .vent-status.disconnected { color: var(--red); }
-.link-status { font-size: 13px; font-weight: bold; }
-.link-status.on  { color: var(--green); }
-.link-status.off { color: var(--red); }
 
 /* ── 警報（狀態列中央置中；資料由 alarm 訊息驅動，分級見 alarm_levels.js）───
  * 三個等級都以整張卡的警示外框 + 頂端列底色呈現（紅／黃／藍）。 */
@@ -883,94 +872,90 @@ body.login-page {
 .admin-empty { color: var(--text-disabled); font-size: 15px; padding: 14px 0; }
 .admin-hint { color: var(--text-label); font-size: 13px; margin-top: 8px; line-height: 1.6; }
 
-/* 設備健康總表：桌面版每台設備是一列橫向長條，減少正方形卡片造成的版面浪費。 */
-.admin-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-}
-/* 四個系統指標只是「有沒有異常」的一眼掃描，不需要佔掉大半列寬；
- * 把中欄壓縮，多出來的寬度讓給左欄（床號／機台編號／財編）。 */
-.admin-card {
-  display: grid;
-  grid-template-columns: minmax(300px, 1.3fr) minmax(250px, 0.85fr) minmax(330px, 1.1fr);
-  grid-template-areas:
-    "head metrics info"
-    "head metrics foot"
-    "trend trend trend";
+/* 設備健康總表：一台裝置一列的對齊表格。
+ *
+ * 這頁的核心動作是「掃一排機器，找出哪台不對勁」，所以欄位必須跨列對齊——
+ * CPU／溫度這些數字排在同一條垂直線上，異常值才會自己跳出來。原本每台是
+ * 一張三欄卡片，卡與卡之間欄位不對齊，等於放棄了列表最大的優勢。
+ *
+ * 主列只留掃描要看的欄位；版本、剩餘空間、開機時長、降頻與全部操作按鈕
+ * 都收進展開列——每一列都掛五顆按鈕只會把版面塞爆。 */
+.dev-table-wrap {
   background: var(--card-bg);
   border: 1px solid var(--divider);
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: auto;          /* 欄位放不下時表格自己橫捲，不讓整頁跟著橫捲 */
 }
-.admin-card-head {
-  grid-area: head;
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--divider);
-}
-/* 標題與識別資訊直向堆疊：財編有自己的一行，長字串也不會被狀態燈擠掉 */
-.admin-card-head .dev-title {
-  display: flex; flex-direction: column; gap: 1px;
-  min-width: 0;
-}
-.admin-card-head .dev-name {
-  min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-weight: bold; font-size: 15px;
-}
-.admin-card-head .spacer { flex: 1; }
-.admin-card-head .status-group { flex: 0 0 auto; padding-inline: 6px; gap: 4px; }
-
-.metric-grid {
-  grid-area: metrics;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(52px, 1fr));
-  gap: 4px;
-  align-items: center;
-  padding: 6px 8px;
-  border-right: 1px solid var(--divider);
-}
-.metric-chip {
-  background: var(--bg-secondary);
-  border: 1px solid var(--divider);
-  border-radius: 5px;
-  padding: 3px 4px;
-  text-align: center;
-}
-.metric-label { font-size: 10px; color: var(--text-label); }
-.metric-val {
-  font-size: 15px; font-weight: bold;
+.dev-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 14px;
+  /* 等寬數字：跨列比對時位數才對得齊 */
   font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
 }
-.metric-val.warn { color: var(--amber); }
-.metric-val.crit { color: var(--red); }
-
-.admin-card-info {
-  grid-area: info;
-  display: flex; flex-wrap: nowrap; gap: 8px;
-  align-items: center;
-  padding: 6px 12px 2px;
-  min-width: 0; overflow-x: auto;
+.dev-table th {
+  font-size: 12px; font-weight: bold; text-align: left;
+  color: var(--text-label);
+  background: var(--bg-secondary);
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--divider);
   white-space: nowrap;
-  font-size: 12px; color: var(--text-secondary);
 }
-.admin-card-info .info-chip { flex: 0 0 auto; }
-.info-chip.crit { color: var(--red); font-weight: bold; }
+.dev-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--divider);
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.dev-table tbody:last-child .dev-detail.hidden + tr td,
+.dev-table tbody:last-child tr:last-child td { border-bottom: none; }
+.dev-row:hover .dev-main td { background: var(--hover); }
 
-.admin-card-foot {
-  grid-area: foot;
-  display: flex; gap: 6px;
-  align-items: center; justify-content: flex-end;
-  padding: 2px 12px 7px;
+/* 數字欄一律靠右：位數對齊才好比較。操作欄與狀態燈欄只佔內容寬度 */
+.dev-table .col-num { text-align: right; }
+.dev-table .col-act { text-align: right; width: 1%; }
+.dev-table .col-dot { width: 1%; padding-right: 0; }
+
+/* 螢幕閱讀器用的欄位名稱（狀態燈與操作欄視覺上不需要標題） */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-.admin-trend {
-  grid-area: trend;
-  padding: 4px 12px 12px;
-  border-top: 1px dashed var(--divider);
+/* 伺服器連線燈 */
+.link-dot {
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--green);
+}
+
+.dev-table .dev-name { font-weight: bold; color: var(--text-primary); }
+.dev-table .dev-ward,
+.dev-table .dev-bed,
+.dev-table .dev-asset { color: var(--text-primary); }
+.dev-table .unassigned { color: var(--text-disabled); }
+.dev-table .metric-val { color: var(--text-primary); font-weight: bold; }
+.dev-table .metric-val.warn { color: var(--amber); }
+.dev-table .metric-val.crit { color: var(--red); }
+
+/* 離線：整列連同識別欄一起轉灰，只留機台編號可讀——這是本頁最該一眼
+ * 看到的狀態，比單獨一顆燈更難忽略。指標值此時已是過期資料，不該搶眼。 */
+.dev-row.offline .link-dot { background: var(--text-disabled); }
+.dev-row.offline .dev-main td,
+.dev-row.offline .dev-main .dev-ward,
+.dev-row.offline .dev-main .dev-bed,
+.dev-row.offline .dev-main .dev-asset,
+.dev-row.offline .dev-main .metric-val { color: var(--text-disabled); }
+.dev-row.offline .dev-main .dev-name { color: var(--text-secondary); }
+
+/* 展開列：操作按鈕 + 次要資訊 + 趨勢圖 */
+.dev-detail > td {
+  padding: 10px 12px 14px;
+  background: var(--bg-secondary);
+  white-space: normal;
+}
+.detail-actions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 10px;
 }
 
 .admin-btn {
@@ -990,30 +975,13 @@ body.login-page {
   background: var(--bg-secondary); cursor: not-allowed;
 }
 
-/* 中型視窗保留橫向感：名稱/狀態與四項指標並排，資訊及操作列放在下一行。 */
-@media (max-width: 1050px) {
-  .admin-card {
-    grid-template-columns: minmax(280px, 1.15fr) minmax(250px, 0.85fr);
-    grid-template-areas:
-      "head metrics"
-      "info foot"
-      "trend trend";
-  }
-  .metric-grid { border-right: none; }
-  .admin-card-info { border-top: 1px solid var(--divider); }
-}
-
-/* 窄螢幕無法容納橫條內容時改為直向，避免指標或操作按鈕被擠出畫面。 */
+/* 窄螢幕：欄位維持對齊（表格橫捲），只把留白收緊。
+ * 刻意不改成直向堆疊——那會讓每台又變回一團自成一格的資訊，
+ * 正是這次要解決的問題。 */
 @media (max-width: 700px) {
   .admin-main { padding-inline: 10px; }
-  .admin-card {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "head" "metrics" "info" "foot" "trend";
-  }
-  .admin-card-head { border-right: none; border-bottom: 1px solid var(--divider); }
-  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .admin-card-info { border-top: none; padding-top: 2px; }
-  .admin-card-foot { justify-content: flex-start; flex-wrap: wrap; }
+  .dev-table th,
+  .dev-table td { padding: 7px 8px; }
 }
 
 /* 設備搜尋：床號／機台編號／財編任一符合即顯示 */
@@ -1029,27 +997,6 @@ body.login-page {
 }
 .dev-filter:focus { outline: none; border-color: var(--focus); }
 .dev-filter::placeholder { color: var(--text-disabled); }
-
-/* 管理頁卡片標題：機台編號為主，床號與財編各是一個帶標籤的欄位，
- * 沒有值一律顯示 --（淡色），一眼看得出哪一項還沒綁定。 */
-.admin-card-head .dev-meta {
-  display: flex; flex-wrap: wrap; gap: 4px 12px;
-  min-width: 0;
-  font-size: 12px;
-}
-.admin-card-head .meta-item {
-  display: inline-flex; gap: 5px; align-items: baseline;
-  min-width: 0;
-}
-.admin-card-head .meta-key { color: var(--text-label); }
-.admin-card-head .dev-bed,
-.admin-card-head .dev-asset {
-  min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.admin-card-head .unassigned { color: var(--text-disabled); }
 
 /* 裝置配對申請：一列一筆，確認碼放大以便與 Pi 螢幕上的數字目視核對 */
 .pair-list { display: grid; gap: 8px; }

@@ -36,6 +36,11 @@ class DeviceState:
         self.patient = ""
         self.online = False
         self.last_seen = 0.0
+        # 本次連線建立（收到合法 hello）的時刻，供管理頁顯示連線時長。
+        # 只在 hello 設定：watchdog 誤判後資料又進來而回復上線時不重設，
+        # 否則一次網路抖動就會讓連線時長歸零而失真（見 PROTOCOL.md）。
+        self.connected_at = 0.0
+        self.app_version = ""      # Pi 端軟體版本；舊版 Pi 不送 → 保持空字串
         self.conn_seq = 0          # 連線世代：舊 TCP 連線的殘留事件不得覆蓋新連線
         self.proto = None
         self.latest = {}           # type -> 最新一則訊息（僅 STATEFUL_TYPES）
@@ -84,16 +89,23 @@ class TelemetryHub:
         st.conn_seq = self._seq
         st.patient = str(msg.get("patient") or "")
         st.proto = msg.get("v")
+        st.app_version = str(msg.get("app_version") or "")
         st.online = True
-        st.last_seen = time.time()
+        st.last_seen = st.connected_at = time.time()
         if st.proto != PROTO_VERSION:
             self.log.warning(f"{device} 協議版本 {st.proto} 與伺服器 {PROTO_VERSION} 不同")
         # 資安規則：病人代碼只顯示在儀表板畫面，禁止寫入 log
-        self.log.info(f"裝置上線: {device}")
-        audit("device_online", device=device)
-        self.broadcast({"type": "link", "device": device, "online": True,
-                        "patient": st.patient, "v": st.proto})
+        self.log.info(f"裝置上線: {device}（版本 {st.app_version or '未提供'}）")
+        audit("device_online", device=device, app_version=st.app_version or "-")
+        self.broadcast(self._link_online(st))
         return device, st.conn_seq
+
+    def _link_online(self, st: DeviceState) -> dict:
+        """上線用的 link 訊息（hello 與 watchdog 誤判回復共用同一份組法，
+        避免兩處各組一次而漏掉新欄位）"""
+        return {"type": "link", "device": st.device, "online": True,
+                "patient": st.patient, "v": st.proto,
+                "connected_at": st.connected_at, "app_version": st.app_version}
 
     def device_message(self, device: str, conn_seq: int, msg: dict):
         st = self.devices.get(device)
@@ -101,9 +113,8 @@ class TelemetryHub:
             return                       # 已被新連線取代的殘留訊息
         st.last_seen = time.time()
         if not st.online:                # watchdog 誤判後資料又進來 → 回復上線
-            st.online = True
-            self.broadcast({"type": "link", "device": device, "online": True,
-                            "patient": st.patient, "v": st.proto})
+            st.online = True             # connected_at 不動：TCP 連線從未中斷
+            self.broadcast(self._link_online(st))
         t = msg.get("type")
         if t == "ping":
             return                       # 心跳只更新 last_seen，不轉發
@@ -208,7 +219,9 @@ class TelemetryHub:
             meta = metas.get(st.device) or {}
             d = {"device": st.device, "patient": st.patient,
                  "online": st.online, "v": st.proto,
-                 "bed": meta.get("bed", ""), "asset": meta.get("asset", "")}
+                 "connected_at": st.connected_at, "app_version": st.app_version,
+                 "bed": meta.get("bed", ""), "ward": meta.get("ward", ""),
+                 "asset": meta.get("asset", "")}
             d.update(st.latest)          # 各 STATEFUL_TYPES 的最新一則
             devs.append(d)
         return {"type": "snapshot", "devices": devs}
@@ -226,7 +239,8 @@ class TelemetryHub:
         if result == "ok":
             self.log.info(f"裝置清冊更新: {device}")
             self.broadcast({"type": "device_meta", "device": device,
-                            "bed": data["bed"], "asset": data["asset"]})
+                            "bed": data["bed"], "ward": data["ward"],
+                            "asset": data["asset"]})
         return result, data
 
     def add_viewer(self):

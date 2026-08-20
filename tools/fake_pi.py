@@ -172,7 +172,9 @@ def run_session(args, model, sysmodel):
     # 關閉 Nagle：小批次立即送出，避免黏包造成到達時間抖動
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     print(f"[{args.device}] 已連線 {args.host}:{args.port}")
-    hello = {"type": "hello", "v": 1, "device": args.device, "patient": args.patient}
+    # app_version 刻意標成 fake：管理頁一眼就能分出哪幾台是模擬器
+    hello = {"type": "hello", "v": 1, "device": args.device,
+             "patient": args.patient, "app_version": "1.0.0-fake"}
     if args.token:
         hello["token"] = args.token
     send_lines(sock, [

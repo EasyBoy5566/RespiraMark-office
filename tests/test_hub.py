@@ -62,6 +62,61 @@ class HelloTest(unittest.TestCase):
         self.assertEqual(links[0]["patient"], "TEST001")
 
 
+class ConnectionMetaTest(unittest.TestCase):
+    """連線時刻與 Pi 軟體版本（PROTOCOL.md「裝置連線時刻與軟體版本」）"""
+
+    def test_hello_records_connected_at_and_version(self):
+        hub = TelemetryHub()
+        before = time.time()
+        hub.device_hello(dict(hello_msg(), app_version="1.2.3"))
+        st = hub.devices["pi-01"]
+        self.assertGreaterEqual(st.connected_at, before)
+        self.assertEqual(st.app_version, "1.2.3")
+
+    def test_missing_app_version_is_empty_string(self):
+        """舊版 Pi 不送 app_version：必須是空字串而非 None——
+        前端直接把它塞進畫面，None 會顯示成 "null" """
+        hub = TelemetryHub()
+        hub.device_hello(hello_msg())
+        self.assertEqual(hub.devices["pi-01"].app_version, "")
+
+    def test_snapshot_carries_connection_meta(self):
+        hub = TelemetryHub()
+        hub.device_hello(dict(hello_msg(), app_version="1.2.3"))
+        dev = hub.snapshot()["devices"][0]
+        self.assertEqual(dev["app_version"], "1.2.3")
+        self.assertEqual(dev["connected_at"], hub.devices["pi-01"].connected_at)
+
+    def test_link_online_carries_connection_meta(self):
+        hub = TelemetryHub()
+        q = hub.add_viewer()
+        hub.device_hello(dict(hello_msg(), app_version="1.2.3"))
+        link = [m for m in drain(q) if m["type"] == "link"][0]
+        self.assertEqual(link["app_version"], "1.2.3")
+        self.assertGreater(link["connected_at"], 0)
+
+    def test_recovery_from_false_offline_keeps_connected_at(self):
+        """watchdog 誤判離線後資料又進來 → 回復上線，但 connected_at 不得重設：
+        TCP 連線從未中斷，重設會讓連線時長歸零而失真"""
+        hub = TelemetryHub()
+        _, seq = hub.device_hello(hello_msg())
+        st = hub.devices["pi-01"]
+        original = st.connected_at
+        st.online = False                       # 模擬 watchdog 逾時判離線
+        hub.device_message("pi-01", seq, {"type": "params", "mode": "VC-SIMV"})
+        self.assertTrue(st.online)
+        self.assertEqual(st.connected_at, original)
+
+    def test_reconnect_updates_connected_at(self):
+        """真正重連（收到新的 hello）才重設連線起點"""
+        hub = TelemetryHub()
+        hub.device_hello(hello_msg())
+        first = hub.devices["pi-01"].connected_at
+        time.sleep(0.02)
+        hub.device_hello(hello_msg())
+        self.assertGreater(hub.devices["pi-01"].connected_at, first)
+
+
 class ConnSeqTest(unittest.TestCase):
     """連線世代：同裝置重連後，舊 TCP 連線的殘留事件必須全部失效"""
 

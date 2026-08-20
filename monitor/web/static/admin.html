@@ -32,9 +32,29 @@
                aria-label="搜尋床號、機台編號或呼吸器財編">
       </div>
       <div id="devEmpty" class="admin-empty">等待裝置連線</div>
-      <div id="devGrid" class="admin-grid"></div>
+      <div class="dev-table-wrap" id="devTableWrap">
+        <table class="dev-table" id="devTable">
+          <thead>
+            <tr>
+              <th class="col-dot"><span class="sr-only">伺服器連線</span></th>
+              <th>機台編號</th>
+              <th>單位</th>
+              <th>床號</th>
+              <th>財編</th>
+              <th>呼吸器</th>
+              <th class="col-num">連線時長</th>
+              <th class="col-num">CPU</th>
+              <th class="col-num">記憶體</th>
+              <th class="col-num">溫度</th>
+              <th class="col-num">磁碟</th>
+              <th class="col-act"><span class="sr-only">操作</span></th>
+            </tr>
+          </thead>
+        </table>
+      </div>
       <p class="admin-hint">
-        數值取不到時顯示 —（例如該欄位在非 Pi 環境無法取得）。
+        數值取不到時顯示 —（例如該欄位在非 Pi 環境無法取得）。展開「詳細」可看到軟體版本、
+        剩餘空間、開機時長、降頻旗標與趨勢圖，全部操作也在裡面。
         「財編」是為每台機器登記它對應的呼吸器財產編號，只顯示在本頁，裝置必須已完成配對才能設定。
         床號不在此設定——之後由財編向院內系統查詢自動帶入；在那之前看板卡片顯示機台編號。
         「移除」只對離線裝置有效，用途是清出版面——裝置重新連上會自動回來，
@@ -66,10 +86,8 @@
         </table>
       </div>
       <p class="admin-hint">
-        本頁僅顯示唯讀清單，不提供改密碼功能。密碼管理方式依伺服器設定
-        （auth_backend）而異：local 模式由管理員在伺服器執行
-        python tools/make_user.py 重設；ldap 模式密碼由院內 LDAP/AD 管理，
-        改密碼請走醫院 HIS 既有流程。建立、刪除帳號一律用 tools/make_user.py。
+        本頁僅顯示唯讀清單，不提供改密碼功能。帳號的建立、刪除與密碼重設一律由管理員
+        在伺服器執行 python tools/make_user.py。
       </p>
     </section>
   </main>

@@ -21,6 +21,8 @@ import json
 import logging
 import os
 
+from monitor.domain import ward
+
 BED_MAX = 32
 ASSET_MAX = 32
 NOTE_MAX = 64
@@ -58,19 +60,25 @@ class DeviceDirectory:
                 return d
         return None
 
-    def meta(self, device_id: str) -> dict:
-        """單台的顯示用資料（絕不含 token_hash）；未登記回空字串欄位"""
-        d = self.find(device_id) or {}
-        return {"bed": str(d.get("bed") or ""),
+    @staticmethod
+    def _meta_of(d: dict) -> dict:
+        """單台的顯示用資料（絕不含 token_hash）。
+        `ward` 由床號推導，不是獨立欄位——單位只有一個真相來源（床號），
+        存兩份只會多一份會過期的資料（見 monitor/domain/ward.py）。"""
+        bed = str(d.get("bed") or "")
+        return {"bed": bed,
+                "ward": ward.from_bed(bed),
                 "asset": str(d.get("asset") or ""),
                 "note": str(d.get("note") or "")}
 
+    def meta(self, device_id: str) -> dict:
+        """單台的顯示用資料；未登記回空字串欄位"""
+        return self._meta_of(self.find(device_id) or {})
+
     def all_meta(self) -> dict:
-        """device_id -> {bed, asset, note}；Hub 組 snapshot 時一次取用，
+        """device_id -> {bed, ward, asset, note}；Hub 組 snapshot 時一次取用，
         避免每台各讀一次檔"""
-        return {d.get("device_id"): {"bed": str(d.get("bed") or ""),
-                                     "asset": str(d.get("asset") or ""),
-                                     "note": str(d.get("note") or "")}
+        return {d.get("device_id"): self._meta_of(d)
                 for d in self.load().get("devices", []) if d.get("device_id")}
 
     # ── 寫入 ────────────────────────────────────────────────────────
@@ -95,8 +103,11 @@ class DeviceDirectory:
                     d["asset"] = str(asset).strip()[:ASSET_MAX]
                 if not self.save(data):
                     return "write_failed", None
-                return "ok", {"device": device_id,
-                              "bed": d.get("bed", ""), "asset": d.get("asset", "")}
+                # 只回契約上有的欄位（PROTOCOL.md）：note 是管理員備註，
+                # 不屬於 API 回應也不該廣播出去
+                meta = self._meta_of(d)
+                return "ok", {"device": device_id, "bed": meta["bed"],
+                              "ward": meta["ward"], "asset": meta["asset"]}
         return "not_found", None
 
     def upsert_device(self, device_id: str, note: str, token_hash: str) -> bool:

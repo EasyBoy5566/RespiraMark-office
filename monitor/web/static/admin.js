@@ -1,16 +1,26 @@
 /* 管理頁（/admin，僅 admin 角色；前端分工見 CLAUDE.md §5）
- * - 設備健康總表：卡片格線（視覺語言比照主儀表板 .card），每張卡是連線 /
- *   CPU / 記憶體 / 溫度 / 磁碟 / 降頻 / 開機時長
- * - 點「趨勢」在卡片內就地展開系統狀態趨勢圖（RMSys 共用繪圖，與儀表板同一套門檻）
- * - 移除離線裝置（DELETE /api/admin/devices）、匯出七天 sys CSV、帳號唯讀清單
- * - 連線狀態（呼吸器序列埠 status / 伺服器 link）顯示在卡片標題列（儀表板不再顯示）
- * - 資料來源與儀表板相同：WebSocket /ws（本頁忽略波形等臨床訊息，只用 sys/link/status）
+ *
+ * 版面是「一台裝置一列」的對齊表格，不是各自為政的卡片——本頁的核心動作是
+ * 掃一排機器找出哪台不對勁，欄位跨列對齊在同一條垂直線上才掃得動。
+ * 每台裝置是一個 <tbody>，內含主列與展開列：
+ * - 主列：連線燈 / 機台編號 / 床號 / 財編 / 呼吸器狀態 / 連線時長 /
+ *         CPU / 記憶體 / 溫度 / 磁碟 / 「詳細」展開鈕
+ * - 展開列：全部操作按鈕（財編、CSV、警報紀錄、移除）＋ 版本、剩餘空間、
+ *         開機時長、降頻旗標 ＋ 系統狀態趨勢圖（RMSys 共用繪圖，首次展開才建立）
+ * - 離線整列轉灰（.dev-row.offline），比單獨一顆燈更難忽略
+ *
+ * 資料來源與儀表板相同：WebSocket /ws（本頁忽略波形等臨床訊息，只用
+ * snapshot / link / sys / status / device_meta / device_removed）。
  */
 "use strict";
 
 const connEl = document.getElementById("conn");
-const devGrid = document.getElementById("devGrid");
+const devTable = document.getElementById("devTable");     // 各裝置的 tbody 掛在這裡
+const devTableWrap = document.getElementById("devTableWrap");
 const devEmpty = document.getElementById("devEmpty");
+
+// 展開列要橫跨主列的全部欄位；改欄位數時這裡跟著改（值 = thead 的 th 數）
+const DETAIL_COLSPAN = 12;
 
 const devices = new Map();   // device_id -> Dev
 
@@ -35,12 +45,27 @@ applyTheme(initTheme);
 const isMissing = (v) => v === null || v === undefined || v === "";
 const fmtGB = (v) => (isMissing(v) ? "—" : `${Math.round(v * 10) / 10} GB`);
 
+/** 本次連線時長。伺服器只給 connected_at 這個原始時刻，格式化是前端的事
+ *  （CLAUDE.md §5）；以瀏覽器本機時間相減，因此依賴兩端時鐘同步（NTP）。 */
+function linkDuration(dev) {
+  if (!dev.online || !dev.connectedAt) return "—";
+  return RMSys.fmtUptime(Math.max(0, Date.now() / 1000 - dev.connectedAt));
+}
+
+/** snapshot 與 link 共用：只在欄位存在時覆寫，離線的 link 不帶這兩欄，
+ *  沿用舊值即可（離線時 linkDuration 本來就顯示 —）。 */
+function applyLinkMeta(dev, m) {
+  if (m.connected_at !== undefined) dev.connectedAt = m.connected_at || 0;
+  if (m.app_version !== undefined) dev.appVersion = m.app_version || "";
+}
+
 // ── 設備卡片 ─────────────────────────────────────────────────────
 function ensureDev(id) {
   let dev = devices.get(id);
   if (dev) return dev;
   dev = { id, online: false, sysHist: [], lastSys: null,
-          bed: "", asset: "",          // 裝置清冊（devices.json），只有這頁能改
+          bed: "", ward: "", asset: "",   // 裝置清冊（devices.json）；ward 由伺服器推導
+          connectedAt: 0, appVersion: "",   // 本次連線起點與 Pi 軟體版本（見 PROTOCOL.md）
           card: null, chips: {}, trendOpen: false, trendChans: null,
           histFetched: false, removeBtn: null, trendBtn: null };
   buildCard(dev);
@@ -50,73 +75,65 @@ function ensureDev(id) {
   return dev;
 }
 
+// 一台裝置 = 一個 tbody（主列 + 展開列）。用真正的表格而不是各自為政的卡片，
+// 是因為這頁的核心動作是「掃一排機器找出哪台不對勁」——CPU／溫度這些數字必須
+// 跨列對齊在同一條垂直線上才掃得動。主列只留掃描要看的欄位，次要資訊與全部
+// 操作都收進展開列，避免每一列都塞滿按鈕。
 function buildCard(dev) {
-  const card = document.createElement("div");
-  card.className = "admin-card";
-  card.dataset.device = dev.id;
-  card.innerHTML = `
-    <div class="admin-card-head">
-      <span class="dev-title">
-        <span class="dev-name"></span>
-        <span class="dev-meta">
-          <span class="meta-item" title="床號由財編向院內系統查詢自動帶入（尚未接上）">
-            <span class="meta-key">床號</span><span class="dev-bed">--</span>
-          </span>
-          <span class="meta-item" title="這台機器對應的呼吸器財產編號">
-            <span class="meta-key">財編</span><span class="dev-asset">--</span>
-          </span>
-        </span>
-      </span>
-      <span class="spacer"></span>
-      <span class="status-group" title="Pi 與呼吸器之間的序列埠連線狀態">
-        <span class="status-tag">呼吸器</span>
-        <span class="vent-status">—</span>
-      </span>
-      <span class="status-group" title="這台 Pi 與中央伺服器之間的網路連線狀態">
-        <span class="status-tag">伺服器</span>
-        <span class="link-status off">離線</span>
-      </span>
-    </div>
-    <div class="metric-grid"></div>
-    <div class="admin-card-info"></div>
-    <div class="admin-card-foot">
-      <button type="button" class="admin-btn meta-btn">財編</button>
-      <button type="button" class="admin-btn trend-btn">趨勢 ▾</button>
-      <button type="button" class="admin-btn">下載 CSV</button>
-      <button type="button" class="admin-btn">警報紀錄</button>
-      <button type="button" class="admin-btn danger">移除</button>
-    </div>
-    <div class="admin-trend hidden">
-      <div class="sys-info-line"></div>
-      <div class="sys-charts"></div>
-    </div>`;
-  renderDevIdentity(dev, card);
+  const body = document.createElement("tbody");
+  body.className = "dev-row";
+  body.dataset.device = dev.id;
+  body.innerHTML = `
+    <tr class="dev-main">
+      <td class="col-dot"><span class="link-dot"></span></td>
+      <td><span class="dev-name"></span></td>
+      <td><span class="dev-ward">--</span></td>
+      <td><span class="dev-bed">--</span></td>
+      <td><span class="dev-asset">--</span></td>
+      <td><span class="vent-status">—</span></td>
+      <td class="col-num link-dur">—</td>
+      ${RMSys.METRICS.map((m) =>
+        `<td class="col-num metric-val" data-k="${m.key}">—</td>`).join("")}
+      <td class="col-act">
+        <button type="button" class="admin-btn detail-btn" aria-expanded="false">詳細 ▾</button>
+      </td>
+    </tr>
+    <tr class="dev-detail hidden">
+      <td colspan="${DETAIL_COLSPAN}">
+        <div class="detail-actions">
+          <button type="button" class="admin-btn">財編</button>
+          <button type="button" class="admin-btn">下載 CSV</button>
+          <button type="button" class="admin-btn">警報紀錄</button>
+          <button type="button" class="admin-btn danger">移除</button>
+        </div>
+        <div class="sys-info-line"></div>
+        <div class="sys-charts"></div>
+      </td>
+    </tr>`;
+  renderDevIdentity(dev, body);
 
-  const grid = card.querySelector(".metric-grid");
   for (const metric of RMSys.METRICS) {
-    const chip = document.createElement("div");
-    chip.className = "metric-chip";
-    chip.innerHTML = `<div class="metric-label">${metric.label}</div>
-                       <div class="metric-val">—</div>`;
-    grid.appendChild(chip);
-    dev.chips[metric.key] = chip.querySelector(".metric-val");
+    dev.chips[metric.key] = body.querySelector(`.metric-val[data-k="${metric.key}"]`);
   }
 
-  const [metaBtn, trendBtn, csvBtn, alarmBtn, removeBtn] =
-    card.querySelectorAll(".admin-card-foot button");
+  const detailBtn = body.querySelector(".detail-btn");
+  detailBtn.addEventListener("click", () => toggleTrend(dev));
+  detailBtn.title = "展開版本、剩餘空間、開機時長、降頻旗標與趨勢圖";
+  dev.trendBtn = detailBtn;
+
+  const [metaBtn, csvBtn, alarmBtn, removeBtn] =
+    body.querySelectorAll(".detail-actions button");
   metaBtn.addEventListener("click", () => editAsset(dev));
   metaBtn.title = "設定這台機器對應的呼吸器財編（床號之後由財編自動帶入）";
-  trendBtn.addEventListener("click", () => toggleTrend(dev));
   csvBtn.addEventListener("click", () => downloadCsv(dev.id));
   csvBtn.title = "從 SQLite 匯出這台機器最近 7 天的系統狀態 CSV";
   alarmBtn.addEventListener("click", () => downloadAlarmLog(dev.id));
   alarmBtn.title = "下載這台機器最近 7 天的警報歷史（由 SQLite 匯出 CSV）";
   removeBtn.addEventListener("click", () => removeDevice(dev.id));
-  dev.trendBtn = trendBtn;
   dev.removeBtn = removeBtn;
 
-  dev.card = card;
-  devGrid.appendChild(card);
+  dev.card = body;
+  devTable.appendChild(body);
   renderCard(dev);
 }
 
@@ -124,12 +141,14 @@ function buildCard(dev) {
 const collate = (a, b) =>
   a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
-// 依機台編號排序：本頁的卡片標題就是機台編號，排序跟著標題走最好找。
+// 依機台編號排序：本頁第一個欄位就是機台編號，排序跟著它走最好找。
 // （看板是護理站用的，那邊依床號排序，見 app.js sortGrid。）
+// 只挑 tbody 重排——devTable 是 <table>，它的子節點還包含 thead，
+// 一起排會把標題列排到中間去。
 function sortGrid() {
-  [...devGrid.children]
+  [...devTable.querySelectorAll("tbody")]
     .sort((a, b) => collate(a.dataset.device, b.dataset.device))
-    .forEach((el) => devGrid.appendChild(el));
+    .forEach((el) => devTable.appendChild(el));
 }
 
 // ── 裝置清冊：床號與呼吸器財編（PROTOCOL.md「裝置床號與財編」）────────
@@ -137,10 +156,13 @@ function sortGrid() {
 // 它之後要由財編向院內系統查詢後自動帶入，開放人工填只會多一份會過期的來源。
 // 管理頁是管「機器」的，標題一律用機台編號（看板才以床號為標題）；
 // 床號與財編各自是一個看得到的欄位，沒有值就顯示 --，不用去猜是誰沒設定。
+// 單位由伺服器從床號推導後隨 snapshot／device_meta 送來（PROTOCOL.md「單位」），
+// 前端不自己算——那是業務規則，看板與本頁各寫一份遲早會不一致。
 function renderDevIdentity(dev, card) {
   const el = card || dev.card;
   el.querySelector(".dev-name").textContent = dev.id;
-  for (const [sel, value] of [[".dev-bed", dev.bed], [".dev-asset", dev.asset]]) {
+  for (const [sel, value] of [[".dev-ward", dev.ward], [".dev-bed", dev.bed],
+                              [".dev-asset", dev.asset]]) {
     const field = el.querySelector(sel);
     field.textContent = value || "--";
     field.classList.toggle("unassigned", !value);
@@ -150,6 +172,7 @@ function renderDevIdentity(dev, card) {
 
 function applyMeta(dev, m) {
   dev.bed = m.bed || "";
+  dev.ward = m.ward || "";
   dev.asset = m.asset || "";
   renderDevIdentity(dev);
 }
@@ -177,12 +200,14 @@ function applyFilter() {
   const q = (deviceFilter.value || "").trim().toLowerCase();
   let shown = 0;
   for (const dev of devices.values()) {
-    const hit = !q || [dev.bed, dev.id, dev.asset]
+    const hit = !q || [dev.ward, dev.bed, dev.id, dev.asset]
       .some((v) => (v || "").toLowerCase().includes(q));
     dev.card.classList.toggle("hidden", !hit);
     if (hit) shown++;
   }
   devEmpty.classList.toggle("hidden", shown > 0);
+  // 一列都沒有時連表格骨架一起收起來，不留一條孤零零的標題列
+  devTableWrap.classList.toggle("hidden", shown === 0);
   devEmpty.textContent = devices.size && !shown
     ? "沒有符合的裝置" : "等待裝置連線";
 }
@@ -191,9 +216,14 @@ deviceFilter.addEventListener("input", applyFilter);
 
 function renderCard(dev) {
   const m = dev.lastSys || {};
-  const link = dev.card.querySelector(".link-status");
-  link.textContent = dev.online ? "連線" : "離線";
-  link.className = `link-status ${dev.online ? "on" : "off"}`;
+  // 離線整列轉灰：這頁最該一眼看到的就是「哪台不在線上」
+  dev.card.classList.toggle("offline", !dev.online);
+  dev.card.querySelector(".link-dot").title =
+    dev.online ? "已連上中央伺服器" : "與中央伺服器離線";
+
+  const dur = dev.card.querySelector(".link-dur");
+  dur.textContent = linkDuration(dev);
+  dev.linkChip = dur;              // 供每 30 秒走動的計時器更新
 
   // Pi 離線後呼吸器連線狀態已不可信（斷線前的舊資料），清空避免顯示矛盾；
   // 重新上線時 Pi 會再送 status，屆時 onStatus 會補回
@@ -207,21 +237,9 @@ function renderCard(dev) {
     const v = m[metric.key];
     const el = dev.chips[metric.key];
     el.textContent = isMissing(v) ? "—" : `${Math.round(v)}${metric.unit}`;
-    el.className = `metric-val ${RMSys.level(metric, v)}`;
+    // col-num 要留著（欄位靠右對齊），只換警示等級
+    el.className = `col-num metric-val ${RMSys.level(metric, v)}`;
   }
-
-  const thrOk = !m.throttled || m.throttled === "0x0";
-  const info = dev.card.querySelector(".admin-card-info");
-  info.innerHTML = "";
-  const addLine = (label, val, crit) => {
-    const line = document.createElement("span");
-    line.className = crit ? "info-chip crit" : "info-chip";
-    line.textContent = `${label} ${val}`;
-    info.appendChild(line);
-  };
-  addLine("剩餘空間", fmtGB(m.disk_free));
-  addLine("開機", RMSys.fmtUptime(m.uptime));
-  addLine("降頻", isMissing(m.throttled) ? "—" : (thrOk ? "正常" : `⚠ ${m.throttled}`), !thrOk);
 
   dev.removeBtn.disabled = dev.online;
   dev.removeBtn.title = dev.online ? "線上裝置不可移除" : "從版面移除這台離線裝置";
@@ -232,18 +250,20 @@ function renderCard(dev) {
   }
 }
 
-// ── 趨勢圖（就地展開在卡片內；每張卡各自的 canvas，首次展開才建立）──
+// ── 展開列（次要資訊 + 操作 + 趨勢圖；每列各自的 canvas，首次展開才建立）──
 function toggleTrend(dev) {
-  const panel = dev.card.querySelector(".admin-trend");
+  const panel = dev.card.querySelector(".dev-detail");
   if (dev.trendOpen) {
     dev.trendOpen = false;
     panel.classList.add("hidden");
-    dev.trendBtn.textContent = "趨勢 ▾";
+    dev.trendBtn.textContent = "詳細 ▾";
+    dev.trendBtn.setAttribute("aria-expanded", "false");
     return;
   }
   dev.trendOpen = true;
   panel.classList.remove("hidden");
-  dev.trendBtn.textContent = "趨勢 ▴";
+  dev.trendBtn.textContent = "詳細 ▴";
+  dev.trendBtn.setAttribute("aria-expanded", "true");
   if (!dev.trendChans) {
     dev.trendChans = RMSys.buildCharts(panel.querySelector(".sys-charts"));
   }
@@ -261,10 +281,11 @@ function toggleTrend(dev) {
   }
 }
 
+// 主列只放掃描要看的欄位，其餘次要資訊集中在這裡（展開才看得到）
 function renderTrendInfo(dev, m) {
-  dev.card.querySelector(".admin-trend .sys-info-line").textContent =
-    `剩餘空間 ${fmtGB(m.disk_free)}　開機時長 ${RMSys.fmtUptime(m.uptime)}` +
-    `　降頻旗標 ${m.throttled || "—"}`;
+  dev.card.querySelector(".dev-detail .sys-info-line").textContent =
+    `版本 ${dev.appVersion || "—"}　剩餘空間 ${fmtGB(m.disk_free)}` +
+    `　開機時長 ${RMSys.fmtUptime(m.uptime)}　降頻旗標 ${m.throttled || "—"}`;
 }
 
 /** 主題/視窗尺寸改變 → 所有展開中的趨勢圖重設 canvas 並全量重畫 */
@@ -482,6 +503,7 @@ function dispatch(m) {
       const dev = ensureDev(d.device);
       applyMeta(dev, d);
       dev.online = !!d.online;
+      applyLinkMeta(dev, d);
       if (d.sys) onSys(dev, d.sys);
       else renderCard(dev);
       if (d.status && dev.online) onStatus(dev, d.status);
@@ -500,6 +522,7 @@ function dispatch(m) {
   if (m.type === "link") {
     const dev = ensureDev(m.device);
     dev.online = !!m.online;
+    applyLinkMeta(dev, m);
     renderCard(dev);
   } else if (m.type === "sys") {
     onSys(ensureDev(m.device), m);
@@ -541,6 +564,16 @@ window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(redrawOpenTrends, 200);
 });
+
+// ── 連線時長走動 ─────────────────────────────────────────────────
+// 這是相對時間，沒有新訊息也要自己往前走。fmtUptime 的解析度是分鐘，
+// 30 秒更新一次已足夠；只改那一顆 chip 的文字，不重跑 renderCard
+// （後者會連展開中的趨勢圖一起重畫）。
+setInterval(() => {
+  for (const dev of devices.values()) {
+    if (dev.linkChip) dev.linkChip.textContent = linkDuration(dev);
+  }
+}, 30000);
 
 // ── 時鐘 ─────────────────────────────────────────────────────────
 setInterval(() => {
