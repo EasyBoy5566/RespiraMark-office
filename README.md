@@ -3,10 +3,10 @@
 接收多台 RespiraMark Pi 的即時波形與參數，在瀏覽器顯示多床儀表板。
 
 ```
-Pi #1..#5 ──TCP 8765──▶ 本伺服器 ──http://本機:8080──▶ 瀏覽器（電腦/手機皆可）
+Pi #1..#5 ──TCP 8765──▶ 本伺服器 ──https://本機:443 ──▶ 瀏覽器（電腦/手機皆可）
 ```
 
-跨平台：Windows / macOS / Linux 皆可執行，僅相依 Python 3.9+ 與 aiohttp。
+跨平台：Windows / macOS / Linux 皆可執行，僅相依 Python 3.12+ 與 aiohttp。
 
 ## 快速開始
 
