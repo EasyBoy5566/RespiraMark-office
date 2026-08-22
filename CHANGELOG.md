@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## 未發布 — 備份改為週備份、警報與系統健康納入備份
+
+備份原則定案（對應資訊室表單二「備份」欄的「週備份留 3 週」）：**每週備份一次、
+保留最近 3 份、四週循環**。原本刻意排除在備份外的警報 episode 與 Pi 系統健康
+兩個 SQLite，改為一併納入。
+
+- 新增 `tools/backup_db.py`：走 SQLite 官方 backup API 取一致快照，**來源可以正在
+  被伺服器寫入、不需停機**，備份後自動跑 `PRAGMA quick_check`。
+  🚨 **SQLite 絕不能用複製檔案的方式備份**——DB 跑 WAL 模式，最近的異動還在 `-wal`
+  裡，運行中 `Copy-Item` 會拿到撕裂的檔案：平常看不出來，真的要還原時才發現壞的
+- `tools/backup.ps1` 改寫：
+  - 納入 `logs\audit_logs\`、`alarm_logs\`、`sys_logs\` 的 SQLite（全走 backup_db.py）
+  - **修掉一個實質缺陷**：原本只備份 `logs\audit.log` 一個檔，輪替後的
+    `audit.log.YYYY-MM-DD` 全部沒進備份——還原後只剩當天那份，交代不了防護基準
+    第 16 點的 6 個月保存。改成 `audit.log*` 一次帶走全部輪替檔
+  - 保留策略由「刪掉 N 天前的」改為「**保留最近 N 份**」（預設 3）：某週因為機器
+    關機而漏跑時，依日期刪除有機會把僅存的備份全部清光
+  - 新增 `-Register`：註冊每週日 03:00 自動執行的工作排程（`-StartWhenAvailable`，
+    當時關機則開機後補跑）
+  - 補上 `-WhatIf` 預覽（README 一直宣稱每支維運腳本都支援，這支其實沒有）
+  - 檔案補上 UTF-8 BOM——Windows PowerShell 5.1 讀 .ps1 預設用 ANSI，沒有 BOM 的
+    中文註解會讓整支腳本解析失敗（其他三支維運腳本本來就有 BOM）
+- 驗證：實跑一次備份後解開 zip 比對，`system_sample` 2549 筆／`alarm_episode`
+  687 筆與正本完全一致、`PRAGMA integrity_check` 皆為 ok、zip 內無 `-wal`／`-shm`
+  殘留；輪替與 `-Register` 亦實測正確
+- ⚠️ **注意保留期的落差**：alarm/sys 本機只留 7 天，週備份等於零餘裕——排程一旦
+  延誤就會在歷史上留下空隙。若要保險，可把 `alarm_retention_days`／
+  `sys_retention_days` 調到 10，讓相鄰兩次快照重疊 3 天（磁碟成本約 +40%，
+  仍在數百 MB 等級）。目前**維持 7 天未改**
+
 ## 未發布 — 床號自動帶入（院方設備系統 maya）
 
 床號一直是空的：`bed` 欄位、`ward` 推導、看板依床號排序都早就做好了，缺的是

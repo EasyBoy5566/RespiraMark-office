@@ -102,7 +102,7 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `maya_max_duration` | 3600 | 秒，單台自呼吸器連線起算的查詢時限，逾時放棄 |
 | `maya_time_tolerance` | 120 | 秒，時間比較的寬容值（見 PROTOCOL.md，方向刻意偏向接受） |
 
-執行期檔案集中於 `logs/`：`server.log`、`audit.log`、`alarm_logs/alarm_history.sqlite3`、`sys_logs/sys_history.sqlite3`。警報與系統狀態都只保存本機最近 7 天且**不納入備份**；兩者皆不保存病人代碼、波形或量測值。Sys／Alarm CSV 都只在管理員下載時即時產生，伺服器端不留匯出檔。
+執行期檔案集中於 `logs/`：`server.log`、`audit.log`、`alarm_logs/alarm_history.sqlite3`、`sys_logs/sys_history.sqlite3`。警報與系統狀態都只保存本機最近 7 天，**納入週備份**（2026-08-22 起，見下方「備份」）；兩者皆不保存病人代碼、波形或量測值。Sys／Alarm CSV 都只在管理員下載時即時產生，伺服器端不留匯出檔。
 
 ### 新增一台 Pi：裝置配對（建議做法）
 
@@ -112,7 +112,7 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 2. **伺服器端**：用 admin 帳號開 `/admin`，「裝置配對申請」區塊會在幾秒內出現該台，**核對確認碼與 Pi 螢幕一致**後按「核可」。
 3. Pi 自動領取 token 寫入自己的 `telemetry.json` 並立刻開始連線——管理員全程不會看到 token。
 
-配對完成後，在管理頁按該台的「財編」登記它對應的**呼吸器財產編號**（只顯示在管理頁，供盤點與報修）。**床號不在此設定**——規劃由財編向院內系統查詢後自動帶入；在那之前看板卡片顯示機台編號，帶入後會自動改以床號為標題並依床號排序。
+配對完成後，在管理頁按該台的「財編」登記它對應的**呼吸器財產編號**。這一步是必要的：財編除了供盤點與報修，也是向 maya 查床號的鍵（見下方「床號自動帶入」）。**床號不在此設定**——由財編自動查得後帶入，看板即改以床號為標題並依床號排序；查不到之前顯示機台編號。
 
 同一台重複配對即換發新 token（核可頁會顯示警告，舊 token 於該台下次重連時失效；床號、財編與備註都會保留）。
 申請 10 分鐘未處理即失效，Pi 端可重新申請。沒有真機時可用
@@ -188,7 +188,37 @@ python tools/fake_maya.py --asset 27943 --bed CCU18 --stale-for 60
 |---|---|
 | `tools/setup_service.ps1` | 註冊 Windows 工作排程器：開機自動啟動＋失敗 1 分鐘內自動重啟，取代手動雙擊 `start_server.bat` |
 | `tools/lock_permissions.ps1` | 用 `icacls` 鎖定 accounts.json/devices.json/config.json/certs/logs 等敏感檔案，只留服務帳號與管理員可讀寫 |
-| `tools/backup.ps1` | 有外部備份空間時，手動備份設定/帳號/裝置權杖/憑證與審計日誌；不含 `ca.key`，也不含 alarm/sys 七天歷史 SQLite |
+| `tools/backup.ps1` | 週備份（保留 3 份）：設定/帳號/裝置權杖/憑證/審計日誌（含輪替檔）＋ alarm/sys/audit 三個 SQLite；**不含 `ca.key`**。`-Register` 可註冊每週自動執行 |
+| `tools/backup_db.py` | SQLite 安全備份（backup API，免停機）；由 `backup.ps1` 呼叫，**SQLite 絕不可直接複製檔案** |
+
+### 備份（週備份、保留 3 份、四週循環）
+
+對應資訊室表單二「備份」欄的「**週備份留 3 週**」。註冊每週自動執行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\backup.ps1 -Dest D:\VentMonitorBackup -WhatIf   # 先預覽
+powershell -ExecutionPolicy Bypass -File tools\backup.ps1 -Dest D:\VentMonitorBackup -Register # 每週日 03:00 自動跑
+```
+
+| 備份 | 不備份 |
+|---|---|
+| `config.json`、`accounts.json`、`devices.json`（財編/床號/token 雜湊） | `certs\ca.key`（**離線保存**，見下） |
+| `certs\server.pem`／`server.key` | `logs\server.log`（運行除錯用，壞了不影響還原） |
+| `logs\audit.log` **與全部輪替檔**（190 天稽核紀錄） | 波形／參數（本來就不落地） |
+| `logs\audit_logs\`、`alarm_logs\`、`sys_logs\` 的 SQLite | |
+
+`-Dest` 要指向**外接碟或網路磁碟**——跟伺服器同一顆硬碟等於沒備份。保留策略是「保留
+最近 3 份」而不是「刪掉幾天前的」：某週因為機器關機而漏跑時，依日期刪除有機會把僅存的
+備份全部清光，依份數保留則永遠留得住最近 3 份。
+
+🚨 **SQLite 絕不能直接複製檔案**：DB 跑 WAL 模式，最近的異動還在 `-wal` 裡，運行中複製
+會拿到撕裂的檔案——平常看起來好好的，真的要還原時才發現打不開。腳本一律走
+`tools/backup_db.py`（SQLite backup API，免停機、自動做完整性檢查）。手動備份或搬移
+DB 時請用同一支工具，不要用檔案總管拖拉。
+
+還原：停伺服器 → 解開 zip → 複製需要的檔案回原位（SQLite 直接覆蓋即可，備份出來的是
+完整單一檔案）→ 重啟。**部署前務必實際演練一次**（W-205／T-205：刪掉 accounts.json →
+從備份還原 → 確認可登入）。
 
 **時間同步**：伺服器與每一台 Pi 都要跟院內同一個時間來源同步（NTP），否則警報/審計
 日誌的時間戳記不可信、事後回溯對不上。部署時請跟資訊室確認院內 NTP 伺服器位址，
