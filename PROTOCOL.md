@@ -27,6 +27,7 @@ Pi (respiramark-pi)  ──TCP 8765, JSON Lines──▶  彙整伺服器  ─�
 
 | 端點 | 說明 |
 |---|---|
+| `GET /healthz` | **免登入**健康檢查（供資訊室監控系統定期探測）：`{"ok":true,"version":"x.y.z","devices":N,"uptime_s":N}`。刻意不含裝置清單/名稱與病人資訊 |
 | `GET /login` | 登入頁（未登入存取 `/` 會被導向此頁） |
 | `POST /login` | 表單欄位 `username` / `password`；成功 → 設 session cookie 並導向 `/`；失敗 → 導回 `/login?err=1`（鎖定中 `?err=lock`） |
 | `POST /logout` | 登出（清除 session）並導向 `/login` |
@@ -70,7 +71,7 @@ Pi ◀── {"status":"approved", "token": ...} 一次性領取 → 寫 telemet
 - **重複配對 = 換發**：同一 `device_id` 已存在時，待核可清單會標示 `renew`，管理頁顯示警告。核可後舊 token 立即失效，但**既有的 TCP 連線不會被中斷**（`hello` 當時已驗證通過），該裝置下次重連時才會用到新 token。
 - 配對狀態只存在伺服器記憶體（不落地），伺服器重啟時全部失效，Pi 端顯示「配對已失效，請重新配對」。
 - ⚠️ **第一次核可會建立 `devices.json`**，伺服器隨即從「單一共用 `ingest_token`」切換成「每台獨立 token」模式（見下方「存取驗證」）。原本靠共用 token 連線的裝置**下次重連時會被拒絕**，必須逐台配對或用 `tools/make_device.py` 補登記。已在連線中的裝置不受影響（`hello` 當時已驗證通過）。
-- **TLS 啟用時 Pi 配不了對**：伺服器端點照常運作，但目前 Pi 端的配對客戶端只講明文 HTTP（純標準庫，也還沒有院內 CA 憑證），連不上 HTTPS。伺服器啟動時會記一則警告，此情境的新裝置請改用 `tools/make_device.py` 手動核發。
+- **TLS 啟用時配對照常可用（走 HTTPS）**：Pi 端配對客戶端已支援 TLS（2026-08-11 補上），前提是該台 `telemetry.json` 先填好 `tls: true` 與 `tls_ca`；CA 憑證還沒發到那台 Pi 時，改用 `tools/make_device.py` 手動核發。
 - `config.json` 的 `pair_enabled` 設為 `false` 時，以下所有端點都不註冊（回 404）。
 
 | 端點 | 權限 | 說明 |

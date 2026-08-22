@@ -1,6 +1,6 @@
 # RespiraMark Office — 醫院部署前 資安與功能評估暨改善計畫
 
-- 文件版本：v1.4（2026-07-07；Phase 0～3 全數完成，依序打 tag `v0.10.0`／`v0.11.0`／`v1.0.0-rc1`；F-01～F-15、G-01～G-09 已關閉，詳見第二/三節「狀態」欄。W-307（LDAP/AD）已提前完成、W-303（密碼自助管理）已移除，見該二列狀態欄與下方「2026-07-07 後續變更」說明。剩 Phase 4（部署前整體驗證）、Phase 5（醫院移轉，需資訊室配合）、W-305（選做，不做））
+- 文件版本：v2.0（2026-08-22；Phase 0～3 全數完成，依序打 tag `v0.10.0`／`v0.11.0`／`v1.0.0-rc1`，現版本 v1.2.0。F-01～F-15、G-01～G-09 已關閉，詳見第二/三節「狀態」欄。**W-307（LDAP/AD）已於 2026-08-11 作廢並移除實作**——2026-08-10 資訊室會議定案登入改走 HIS 帳密（見第七節），W-303（密碼自助管理）已移除。2026-07～08 另完成：裝置配對流程、警報 episode 歷史與 prio 分級、單床詳細監測工作台、床號/財編/單位（ward 推導）、警報音合成、每日輪替日誌 190 天、error middleware、部署範本 web 443。**目前重心：第八節「醫院 VM 部署整備」**——行政流程申請 VM 中（約 1.5～3 個月），程式側剩餘工作與待資訊室確認事項見該節。剩 Phase 4（部署前整體驗證）、Phase 5（醫院移轉）、W-305（選做，不做））
 - 評估範圍：respiramark-office 全部程式碼（後端 `main.py` + `monitor/`、前端 `monitor/web/static/`、工具 `tools/`、測試 `tests/`）、與 Pi 端遙測客戶端（`respiramark-pi/respiramark/web/telemetry_client.py`）的介接、伺服器部署方式
 - 文件用途：作為醫院上線前的**工作清單與驗收依據**。每個工作項目（W-xxx）都有對應測試項目（T-xxx），照 Phase 順序逐一完成、逐一勾選，全部完成即可移轉到醫院伺服器
 - 遵循原則：所有改善方案均符合本專案 CLAUDE.md 鐵則（相依只有 aiohttp、前端零框架、資料不離開院內網、病人代碼不進 log）
@@ -10,23 +10,24 @@
 ## 一、系統現況總覽
 
 ```
-Pi #1..#16 ──TCP :8765（JSON Lines，TLS 可選，共用 token）──▶ 彙整伺服器（單一 Python 程序，aiohttp）
+Pi #1..#16 ──TCP :8765（JSON Lines，TLS，每台獨立 token）──▶ 彙整伺服器（單一 Python 程序，aiohttp）
                                                                     │
-瀏覽器（護理站/管理員）◀──HTTPS :8080 + WebSocket /ws（登入 session）─┘
+瀏覽器（護理站/管理員）◀──HTTPS :8080（醫院 443）+ WebSocket /ws（登入 session）─┘
 ```
 
-| 面向 | 現況（Phase 1 完成後，2026-07-07） |
+| 面向 | 現況（2026-08-22，v1.2.0） |
 |---|---|
-| 程式架構 | 三層（transport / domain / web），composition root 在 main.py；新增中性共用模組 `monitor/crypto.py`、`monitor/audit.py`（config.py 同層級，供任一層 import） |
-| 傳輸加密 | 自建 CA + TLS 1.2+（兩個 port 同時加密），CA 釘選，憑證缺失時拒絕啟動（不會靜默退回明文） |
-| Pi 端驗證 | **每台裝置獨立 token**（`devices.json` + `tools/make_device.py`，PBKDF2 雜湊）；未設定 `devices.json` 時退回單一共用 `ingest_token`（向後相容）。ingest 另有連線數上限、hello/閒置逾時、訊息格式驗證 |
-| 瀏覽器驗證 | 帳密登入（PBKDF2-SHA256 60 萬次雜湊）、伺服器端 session（閒置逾時 + 絕對逾時 + 總量上限定期掃除）、HttpOnly/SameSite=Lax/Secure cookie、viewer/admin 角色、登入失敗雙鍵鎖定（IP+帳號 與 IP 總量兩層） |
-| HTTP 安全 | 安全標頭 middleware（CSP `default-src 'self'`、X-Frame-Options、X-Content-Type-Options、Referrer-Policy、TLS 時 HSTS）；`/ws` Origin 同源檢查 |
-| 審計 | `logs/audit.log`（10MB×5 輪替）記錄登入/登出、管理操作、裝置上下線與被拒事件，內建病人代碼/密碼/token 防呆 |
-| 資料落地 | 波形/參數不落地；Pi 系統健康與警報皆以 SQLite 保存最近 7 天，CSV 僅在下載時即時產生。兩者皆不含病人代碼 |
+| 程式架構 | 三層（transport / domain / web），composition root 在 main.py；中性共用模組 `monitor/crypto.py`、`monitor/audit.py`、`monitor/version.py` |
+| 傳輸加密 | TLS 1.2+（兩個 port 同時加密），憑證缺失時拒絕啟動（不會靜默退回明文）。開發用自建 CA（make_certs.py）；**醫院定案改院內 CA 簽發憑證**（用 `ventmonitor.csh.org.tw` 申請），自建 CA 降為開發測試用 |
+| Pi 端驗證 | **每台裝置獨立 token**：裝置配對流程（Pi 申請 → /admin 核可 6 位碼 → 自動領取；TLS 下走 HTTPS）或 `tools/make_device.py` 手動核發，PBKDF2 雜湊；`devices.json` 不存在時退回單一共用 `ingest_token`。ingest 另有連線數上限、hello/閒置逾時、訊息格式驗證 |
+| 瀏覽器驗證 | 帳密登入（PBKDF2-SHA256 60 萬次雜湊，本機 `accounts.json`）、伺服器端 session（閒置 + 絕對逾時 + 總量上限定期掃除）、HttpOnly/SameSite=Lax/Secure cookie、viewer/admin 角色、登入失敗雙鍵鎖定（5 次/15 分，符防護基準 42）。**LDAP 已移除，未來改接 HIS 帳密**（驗證器依賴注入抽象保留，等資訊室規格） |
+| HTTP 安全 | 安全標頭 middleware（CSP `default-src 'self'`、X-Frame-Options、X-Content-Type-Options、Referrer-Policy、TLS 時 HSTS）；`/ws` Origin 同源檢查；error middleware（錯誤頁只給簡短訊息＋錯誤碼，詳情只進 log，符防護基準） |
+| 審計/日誌 | `logs/audit.log` 與 `server.log`：**每日輪替、保留 190 天**（≥6 個月，符防護基準 16）、時戳 ISO 8601 含時區（可對應 UTC，符防護基準 24），內建病人代碼/密碼/token 防呆 |
+| 資料落地 | 波形/參數不落地；Pi 系統健康（sys）與警報 episode 皆以 SQLite 保存最近 7 天，CSV 僅在管理員下載時即時產生。兩者皆不含病人代碼。帳號/裝置清冊仍為 JSON 檔（整併入 SQLite 的工作見第八節 P-06） |
+| 儀表板功能 | 多床卡片（床號標題、單位由床號推導、欄數 2–8、監視器模式、深淺主題）、單床詳細監測工作台（loop 圖、警報歷史）、警報依實機 prio 三級分級＋合成警報音（逐卡靜音）、管理頁對齊表格（連線時長、Pi 軟體版本、財編登記、CSV 匯出、配對核可） |
 | 前端 | 原生 HTML/CSS/JS，零外部資源（無 CDN），使用者資料以 textContent 寫入（防 XSS 的正確作法） |
-| 測試 | 50 項單元測試（hub / auth / crypto / device_auth / ingest 裝置模式）+ 端對端冒煙測試（涵蓋 TLS、登入、每台獨立 token、安全標頭、Origin 檢查、連線防護、審計日誌、角色權限、管理功能） |
-| 部署方式 | 手動雙擊 start_server.bat；**尚無**服務化、開機自啟（Phase 2 W-202，待辦） |
+| 測試 | **143 項單元測試** + 端對端冒煙測試（涵蓋 TLS、登入、獨立 token、配對閉環、安全標頭、Origin 檢查、連線防護、審計日誌、角色權限、警報歷史、ward 推導、管理功能） |
+| 部署方式 | 服務化腳本已備（`tools/setup_service.ps1` 等，Phase 2）；**正式套用留待醫院 VM**（Windows Server 2025，申請中，見第八節） |
 
 ### 已具備、應保留的資安設計（評估結論：基礎良好）
 
@@ -193,7 +194,7 @@ W-305（歷史波形回放）依計畫維持選做、不做。
 
 | 編號 | 工作內容 | 驗收 |
 |---|---|---|
-| W-501 | 環境準備：向資訊室提交需求清單（**見附錄 C，可直接列印/複製**），確認：①伺服器主機＋固定 IP（有線院內網段，比照現有系統所在網段）②防火牆放行 8765/8080，僅限院內網段來源，不對外網開放 ③Python 3.9+ 安裝許可、服務帳號 ④（建議）內部 DNS 名稱指向固定 IP，比照 `maya-ap.csh.org.tw` 的做法 ⑤（建議）是否有內部憑證簽發機構（Internal CA）可直接簽發正式憑證 ⑥呼吸器所在病房網段與伺服器網段的路由是否相通 ⑦院內 NTP 位址 | T-501：申請單核准；`python --version` 正確；從護理站網段可連到伺服器 8080/8765，從外部網路連不到（資訊室協助驗證或自行用手機關閉 Wi-Fi 改行動網路測試連不到） |
+| W-501 | 環境準備：向資訊室提交需求清單（原附錄 C，**已由第八節的定案與待確認清單取代**），確認：①伺服器主機＋固定 IP（有線院內網段，比照現有系統所在網段）②防火牆放行 8765/8080，僅限院內網段來源，不對外網開放 ③Python 3.9+ 安裝許可、服務帳號 ④（建議）內部 DNS 名稱指向固定 IP，比照 `maya-ap.csh.org.tw` 的做法 ⑤（建議）是否有內部憑證簽發機構（Internal CA）可直接簽發正式憑證 ⑥呼吸器所在病房網段與伺服器網段的路由是否相通 ⑦院內 NTP 位址 | T-501：申請單核准；`python --version` 正確；從護理站網段可連到伺服器 8080/8765，從外部網路連不到（資訊室協助驗證或自行用手機關閉 Wi-Fi 改行動網路測試連不到） |
 | W-502 | 憑證重簽：**若資訊室能提供內部 CA 簽發**→直接採用他們核發的憑證檔（`tls_cert`/`tls_key` 指過去），瀏覽器不會跳警告，省去逐台匯入 CA 的步驟；**若無**→伺服器上 `python tools/make_certs.py --host <醫院固定IP或內部網域名稱>`（沿用既有 CA → Pi 端 ca.pem 不用換），把 ca.pem 部署到每台 Pi 與看板電腦、ca.key 離線保存（見 W-204） | T-502：瀏覽器 https 無憑證錯誤（自簽 CA 情況下需先匯入）；Pi TLS 連線成功 |
 | W-503 | 憑據全面換新：**開發期所有 token/密碼一律不沿用**——每台 Pi 用 make_device.py 發新 token；建立正式帳號（admin×1、看板 viewer×N）；刪除所有測試帳號；accounts/devices/config 檔案權限套 W-204 | T-503：make_user.py --list 與 make_device.py --list 只有正式項目；舊 token 連線被拒 |
 | W-504 | 漸進接入驗證：①院內另一台電腦跑 fake_pi 打通全鏈 ②接**一台**真 Pi 驗證 24 小時 ③再全數接入 | T-504：每階段儀表板顯示正常、audit.log 無異常、資訊室防火牆無阻擋記錄 |
@@ -244,11 +245,11 @@ W-305（歷史波形回放）依計畫維持選做、不做。
 
 上線當天逐項確認，**任一項未勾即不開放使用**：
 
-- [ ] TLS 啟用（config 指向醫院 IP 憑證），瀏覽器與 Pi 皆驗證通過
-- [ ] auth_enabled=true；只有正式帳號，無測試/預設帳號，密碼皆 ≥8 碼
-- [ ] 每台 Pi 獨立 token（devices.json），開發期 token 已全部作廢
-- [ ] ca.key 已離線保存並自伺服器移除；敏感檔案 ACL 已鎖
-- [ ] 防火牆僅放行 8765/8080 且來源限監測網段
+- [ ] TLS 啟用（config 指向院內 CA 簽發、以 `ventmonitor.csh.org.tw` 申請的憑證），瀏覽器與 Pi 皆驗證通過
+- [ ] auth_enabled=true；只有正式帳號，無測試/預設帳號，密碼皆 ≥8 碼（HIS 介接完成則以 HIS 帳密登入）
+- [ ] 每台 Pi 獨立 token（配對流程核發），開發期 token 已全部作廢
+- [ ] 敏感檔案 ACL 已鎖；若用自建 CA（開發備援）則 ca.key 已離線保存並自伺服器移除
+- [ ] 防火牆僅放行 443/8765，來源限 csh-device（Pi 上傳）與 csh-staff-s（看板）網段，不對外網開放
 - [ ] 服務自動啟動與自動重啟已驗證（實際重開機測過）
 - [ ] audit.log / server.log 正常輪替寫入；日誌中無病人代碼
 - [ ] 若院方提供外部備份空間，備份排程生效且做過還原演練
@@ -310,6 +311,65 @@ W-305（歷史波形回放）依計畫維持選做、不做。
 
 ---
 
+## 八、醫院 VM 部署整備（2026-08-10 資訊室會議定案；本節取代附錄 C 的泛用需求清單與 W-501 的部分內容）
+
+醫院為**中山醫學大學附設醫院**（csh）。VM 行政申請流程約 **1.5～3 個月**，雙軌進行：
+行政跑流程的同時，與醫工/資訊室釐清規格分工（波形來源涉及醫工管理的呼吸器與 maya
+財編資料庫，後續會議需邀醫工）。申請文件為資訊室三份表單：**表單二**系統建置說明
+（含附件一～九：架構圖、拓樸圖、主機清單、網路權限、帳號權限、備份、Log、變更記錄、
+特權帳號）、**表單五**特權帳號申請、**表單六**防護需求等級評估（80 項防護基準）。
+
+### 8.1 已定案事項
+
+| 項目 | 定案內容 |
+|---|---|
+| VM | **Windows Server 2025**（現有 PowerShell 維運腳本沿用）；預設規格 4 核/4G RAM/40G HDD（超過要寫原因）；hostname ≤8 碼，建議 **VENTMON1** |
+| 網路隔離 | VM **不連外網**——程式碼與 Python 套件（wheel）本地下載後手動傳入；維運走遠端桌面＋console 主控台 |
+| DNS / 憑證 | 內部 DNS **`ventmonitor.csh.org.tw`**；憑證由資訊室協助簽署（內部 CA 或公有憑證未確認）。Pi 端 `tls_ca` 放院內 CA 根憑證，伺服器憑證年年換發時 Pi 不用動 |
+| 埠 | web **443**（HTTPS，含配對 API）＋ ingest **8765**（TLS）；`config.json.example` 已按此設定 |
+| Pi 網路 | 設備專用 SSID **csh-device**（DHCP、**MAC 造冊列管**）；Pi→伺服器封包需 TLS |
+| 看板端 | 平板/手機/護理站經 **csh-staff(-s)** 連入；**csh-guest 確定不可用**（captive portal 且與內網隔離） |
+| 登入 | **改走 HIS 帳號密碼**（院方 LDAP 僅供院內個人服務，不適用；maya 是他們自己的帳號管理）；介接方式待資訊室提供文件與教學 |
+| 持久化 | SQLite 即可，不需外部資料庫 |
+| 日誌/備份 | Log 正式系統保留 **≥6 個月**（程式已符：190 天每日輪替）；備份原則三選一（日備份留 3 天/週備份留 3 週/月備份留 1 個月） |
+| 功能需求（院方提出） | UI **分頁顯示**、**單位選擇**功能（見 8.3 P-02/P-03） |
+| 防護等級（2026-08-11 自評建議，未定案） | 機密性中（含病歷號）→ 整體**中級**；核心系統 **N**（床邊錄製與呼吸器警報不依賴 VM）；機敏資料**是**→儲存加密擬問 BitLocker；RPO 24h、RTO 8h、MTPD 24h（波形原始資料在床邊 CSV，VM 為次要副本） |
+
+### 8.2 仍待資訊室／醫工確認
+
+1. **csh-device 掛 MAC 造冊後是否即免 captive portal**（無頭 Pi 無法過網頁認證，此點是 Pi 遙測可行性的前提）
+2. csh-device 網段可否連到 VM 的 443/8765；可否解析 `ventmonitor.csh.org.tw`
+3. csh-staff(-s) 網段到 VM 443 的放行
+4. Pi 該勾 **csh-device-s 還是 csh-medical**（表單二出現的新 SSID，問醫工/資訊室）
+5. 憑證型式（內部 CA vs 公有）與續期流程
+6. **HIS 登入介接規格**：協定/API、fallback（HIS 斷線時要不要本機備援帳號）、授權模型（誰能用本系統、viewer/admin 怎麼給）、稽核要求
+7. 院內 **NTP** 伺服器位址（W-206 前提）
+8. 弱點掃描（防護基準中/普級皆要求）由誰執行、頻率與報告格式
+9. 更新傳檔管道（隨身碟掃毒帶入？內部檔案伺服器？）
+10. Pi 機隊管理的 **SSH 放行**（管理機可用同一台 VM）、802.1X/MAC 註冊細節、Pi 財產登記
+11. VM 磁碟加密（BitLocker）可否由院方開啟（機敏資料儲存加密勾選項）
+12. 特權帳號申請（表單五）是否適用於非院內員工身分的維運連線
+13. **床號自動帶入的資料來源**：財編→床號的查詢介接（醫工 maya 財編資料庫或 HIS；HL7 ADT / REST / 唯讀 view 皆可，只需唯讀兩欄位）
+
+### 8.3 程式側剩餘工作（對齊 2026-08-22 程式碼盤點）
+
+| 編號 | 工作 | 前置/現況 | 量 |
+|---|---|---|---|
+| P-01 | **HIS 帳密驗證器**：新增實作 `authenticate()/has_users()/list_users()` 的類別並在 `main.py` 的 `build_authenticator()` 選用（依賴注入抽象已保留，登入頁/session/middleware 不動） | ⛔ 卡 8.2-6 規格 | M |
+| P-02 | **看板單位選擇**（院方需求）：前端篩選 UI。後端已備——`ward` 由床號推導（`domain/ward.py`），隨 `snapshot`/`device_meta` 送出，管理頁已有單位欄 | 可立即動工 | S–M |
+| P-03 | **看板分頁顯示**（院方需求）：多床超過一屏時分頁；與 P-02、欄數選擇器的互動需一併設計 | 可立即動工 | M |
+| P-04 | **床號自動帶入**：以財編向院內系統查床號寫入 `bed`（`PUT /api/admin/devices/{device}/meta` 已留 `bed` 欄位，管理頁刻意不開放人工輸入） | ⛔ 卡 8.2-13 介接 | M |
+| P-05 | **W-405 三份文件**（G-10，最大缺口）：資訊室部署與安全說明書、護理站操作手冊、管理員手冊；表單二附件一～九可共用其內容 | 可立即動工 | M |
+| P-06 | **持久化整併 SQLite**：帳號（accounts.json）、裝置清冊（devices.json）、審計（audit.log）整併入 `data/office.sqlite3` 與 `logs/audit_logs/audit_history.sqlite3`，備份改走 SQLite backup API（WAL 下直接複製檔案會撕裂）。⚠️ **2026-08-21 曾完成一版並實際跑過遷移（logs/ 內留有 audit_history.sqlite3 與 .migrated 檔），但該版程式碼未 commit 即遺失，需重做**；重做時「逐台驗證模式」的判斷應改為「device 表有無裝置」而非「檔案是否存在」 | 可立即動工 | M–L |
+| P-07 | `max_devices` 程式預設 65 為壓測遺留，收回 16（或依實際機隊數）；順帶盤點 config 預設值與 example 的其餘差異 | 可立即動工 | S |
+| P-08 | Phase 4 整體驗證正式執行並簽核：W-401（72h soak）、W-402（資安自檢）、W-403（故障演練）、W-404（16 床效能） | 部署前 | M |
+| P-09 | 弱點掃描整備：關閉不必要服務/埠、預留修補時程（配合 8.2-8） | 部署時 | S |
+
+Pi 端（respiramark-pi 專案）配套：配對客戶端 TLS/CA 已完成（2026-08-11）；機隊管理
+（SSH + Ansible、hostname=資產標籤、黃金映像 SD 卡）與第二期網路 UI 依 8.2 的答案再定案。
+
+---
+
 ## 附錄 A — 風險 ↔ 工作對照
 
 | 風險 | 工作 | | 風險 | 工作 |
@@ -334,7 +394,7 @@ Phase 0（半天）→ Phase 1（約 2 週）→ Phase 2（約 1 週）→ Phase
 原則：**每完成一個 W 項目就跑一次全部自動化測試並 commit**（一個 commit 一件事）；
 每個 Phase 結束打 tag；任何協議變更先改 PROTOCOL.md（contract-first）再動程式。
 
-## 附錄 C — 資訊室需求清單（可直接列印/複製使用，對應 W-501/W-502/W-307）
+## 附錄 C — 資訊室需求清單（**2026-08-22 起由第八節取代**，保留作歷史紀錄；C.2 隨 W-307 作廢）
 
 ### C.1 伺服器與網路（第一次接洽一定要問）
 

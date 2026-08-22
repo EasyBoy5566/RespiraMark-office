@@ -1,10 +1,16 @@
-# RespiraMark Office — 中央監視儀表板
+# VentMonitor（respiramark-office）— 中央監視儀表板
 
 接收多台 RespiraMark Pi 的即時波形與參數，在瀏覽器顯示多床儀表板。
+2026-07-17 起本系統對外名稱為 **VentMonitor**（資料夾名稱暫未改）。
 
 ```
-Pi #1..#5 ──TCP 8765──▶ 本伺服器 ──http://本機:8080──▶ 瀏覽器（電腦/手機皆可）
+Pi #1..#N ──TCP 8765──▶ 本伺服器 ──http(s)://本機:8080（醫院 443）──▶ 瀏覽器（電腦/手機皆可）
 ```
+
+正式部署目標為醫院資訊室虛擬機（2026-08-10 會議定案）：Windows Server 2025、
+內部 DNS `ventmonitor.csh.org.tw`、web 走 443 + TLS（院內 CA 簽發憑證）、
+Pi 走 csh-device 網段、看板端走 csh-staff-s；登入未來改接 HIS 帳密（介接規格待資訊室提供，
+目前先用本機帳號）。細節見 IMPROVEMENT_PLAN.md 第八節。
 
 跨平台：Windows / macOS / Linux 皆可執行，僅相依 Python 3.9+ 與 aiohttp。
 
@@ -32,7 +38,7 @@ python tools/fake_pi.py --device fake-03 --patient TEST003 --alarms
 檔案中只保存雜湊，不保存明文，也不會覆寫原有的正式裝置。跨機器測試不會自動登記，請先由伺服器端
 `tools/make_device.py` 建立測試裝置，再以 `--token` 傳入該次顯示的 token。
 
-儀表板即時出現對應床位卡片：三條波形 + 通氣模式 + 設定值（有警報時卡片頂端顯示紅色警報列）。**點擊卡片放大**可看所有量測值。
+儀表板即時出現對應床位卡片：三條波形 + 通氣模式 + 設定值（有警報時整張卡依警報等級點亮，level 1/2 另有合成警報音，可逐卡靜音）。**點擊卡片放大**進入單床詳細監測工作台（全部量測值、P-V/F-V loop、警報歷史）。header 可調每列欄數（2–8）、切深淺主題與監視器模式。
 
 ### 自動化測試（改完程式 push 前必跑）
 
@@ -46,11 +52,8 @@ python tests/smoke_test.py                # 端對端冒煙測試
 ## 真實 Pi 接入
 
 1. 伺服器啟動時會印出本機區網 IP，例如 `192.168.0.50`
-2. 在 Pi 的 `RespiraMark-pi/` 目錄：
-   ```bash
-   cp telemetry.json.example telemetry.json
-   nano telemetry.json     # server_host 填上面那個 IP
-   ```
+2. 在 Pi 的**設定頁**填入伺服器位址（不需 SSH 改檔；`telemetry.json` 手動編輯保留為備援），
+   再按「與伺服器配對」完成 token 核發（見下方「裝置配對」）
 3. Pi 啟動監測頁後就會自動連入；沒接呼吸器時只會顯示連線狀態，接上就有波形
 
 ## Windows 防火牆（第一次跑必做）
@@ -80,7 +83,7 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `pair_enabled` | true | 是否開放裝置配對端點（見下「新增一台 Pi」）；false = 一律用 `tools/make_device.py` 手動核發 |
 | `pair_ttl` | 600.0 | 配對申請的有效秒數（未核可或核可後未領取皆適用） |
 | `pair_max_pending` | 5 | 同時待核可的申請數上限 |
-| `max_devices` | 16 | 裝置數上限，超過即拒絕新裝置 |
+| `max_devices` | 65 | 裝置數上限，超過即拒絕新裝置（程式預設 65 是壓測時調高的值；`config.json.example` 為 16，正式部署請依實際機隊數明填） |
 | `ingest_max_conns` | 64 | 同時 TCP 連線數上限，超過拒絕新連線 |
 | `ingest_hello_timeout` | 10.0 | 連線後幾秒沒收到合法 hello 就斷線 |
 | `ingest_idle_timeout` | 60.0 | hello 通過後幾秒沒資料就斷線（Pi 每 2 秒 ping，留有餘裕） |
@@ -111,10 +114,10 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 
 ⚠️ **第一次核可會建立 `devices.json`**，伺服器隨即從「單一共用 `ingest_token`」切換成
 「每台獨立 token」模式，原本用共用 token 的舊裝置下次重連會被拒絕——請一併配對或用下面的
-`make_device.py` 補登記。另外，伺服器啟用 TLS 時 Pi 端配對客戶端連不上（只支援明文
-HTTP），該情境請走下面的手動流程。
+`make_device.py` 補登記。伺服器啟用 TLS 時配對照常可用（走 HTTPS），但該台 Pi 的
+`telemetry.json` 需先填好 `tls: true` 與 `tls_ca`（院內 CA 根憑證），否則憑證驗證失敗會被拒。
 
-### 手動核發權杖（fallback：TLS 環境、或配對流程不可用時）
+### 手動核發權杖（fallback：配對流程不可用、或 Pi 還沒拿到 CA 憑證時）
 
 ```bash
 python tools/make_device.py --device pi-icu-01 --note "ICU 3床"   # 產生新 token（只顯示一次）
@@ -137,9 +140,10 @@ python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩
 
 | 階段 | Pi 端 | 伺服器端 |
 |---|---|---|
-| 自家 Wi-Fi | telemetry.json 填筆電家用 IP | 本機跑 server.py + 防火牆放行 |
-| 醫院 Wi-Fi（筆電） | 改 server_host 為筆電院內 IP | 同一台，不用動 |
-| 醫院電腦 RT004 | 改 server_host 為 172.19.18.70 | 複製本資料夾過去、裝 Python + aiohttp、防火牆請資訊室協助放行 |
+| 自家 Wi-Fi | 設定頁填筆電家用 IP | 本機跑 `python main.py` + 防火牆放行 |
+| 醫院 Wi-Fi（筆電） | 改伺服器位址為筆電院內 IP | 同一台，不用動 |
+| 醫院電腦 RT004 | 改伺服器位址為 172.19.18.70 | 複製本資料夾過去、裝 Python + aiohttp、防火牆請資訊室協助放行 |
+| **醫院 VM（正式，申請中）** | 伺服器位址填 `ventmonitor.csh.org.tw`，`tls: true` + `tls_ca`（院內 CA 根憑證）；走 csh-device 網段（MAC 造冊） | Windows Server 2025（hostname 建議 VENTMON1）；`config.json` 用 `config.json.example`（web 443 + TLS，憑證由資訊室簽發）；防火牆放行 443 + 8765；不連外網，程式與套件離線帶入 |
 
 ## 正式伺服器維運工具（IMPROVEMENT_PLAN.md Phase 2）
 
