@@ -23,9 +23,11 @@ import sys
 from logging.handlers import TimedRotatingFileHandler
 
 from monitor.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
+from monitor.domain.bed_sync import BedSync
 from monitor.domain.device_directory import DeviceDirectory
 from monitor.domain.hub import TelemetryHub
 from monitor.domain.pairing import PairingService
+from monitor.transport import maya_client
 from monitor.transport.device_auth import DeviceRegistry
 from monitor.transport.ingest import start_ingest
 from monitor.web.auth import AuthManager, LocalAuthenticator
@@ -89,6 +91,38 @@ def build_auth_manager(cfg: dict, tls_on: bool):
         log.warning("帳號名單尚無任何項目，目前無人能登入——"
                     "請先執行 python tools/make_user.py --user <帳號> --role admin")
     return mgr
+
+
+def build_bed_sync(cfg: dict, hub, directory):
+    """建立床號自動帶入掛件並掛上 Hub；未啟用回傳 None。
+
+    這裡是 domain（BedSync）與 transport（maya_client）唯一的接點——
+    領域層不准 import 傳輸層，composition root 才能同時看到兩邊。
+    """
+    log = logging.getLogger("main")
+    if not cfg.get("maya_enabled"):
+        log.info("床號自動帶入未啟用（maya_enabled=false）——"
+                 "床號一律空白，看板顯示機台編號")
+        return None
+
+    def write_bed(device: str, bed: str):
+        """查到床號後寫回清冊並廣播 device_meta（看板即時換標題與排序）"""
+        return hub.set_device_meta(device, bed=bed)
+
+    bed_sync = BedSync(directory=directory,
+                       apply_bed=write_bed,
+                       is_online=hub.is_online,
+                       fetch=maya_client.fetch_positions,
+                       url=str(cfg["maya_url"]),
+                       poll_interval=float(cfg["maya_poll_interval"]),
+                       timeout=float(cfg["maya_timeout"]),
+                       max_duration=float(cfg["maya_max_duration"]),
+                       tolerance=float(cfg["maya_time_tolerance"]))
+    hub.attach_bed_sync(bed_sync)
+    log.info(f"床號自動帶入已啟用，查詢對象: {cfg['maya_url']}")
+    if not directory.exists():
+        log.warning("裝置清冊尚未建立：查到床號也無處可寫，請先完成裝置配對並登記財編")
+    return bed_sync
 
 
 class LocalIsoFormatter(logging.Formatter):
@@ -251,6 +285,8 @@ async def main():
                        alarm_db_path=alarm_db_path,
                        alarm_retention_days=int(cfg["alarm_retention_days"]),
                        directory=directory)
+    # 床號自動帶入（domain 不得 import transport，兩者在此組裝，見 bed_sync.py 檔頭）
+    bed_sync = build_bed_sync(cfg, hub, directory)
     ingest_server = await start_ingest(hub, int(cfg["ingest_port"]),
                                        token=str(cfg["ingest_token"] or ""),
                                        ssl_ctx=ssl_ctx,
@@ -262,6 +298,7 @@ async def main():
                                  ssl_ctx=ssl_ctx, authmgr=authmgr, pairing=pairing)
     watchdog = asyncio.ensure_future(hub.watchdog())
     auth_watchdog = asyncio.ensure_future(authmgr.watchdog()) if authmgr else None
+    bed_poller = asyncio.ensure_future(bed_sync.run()) if bed_sync else None
 
     print_banner(cfg, tls_on=ssl_ctx is not None, auth_on=authmgr is not None,
                  pair_on=pairing is not None)
@@ -271,6 +308,8 @@ async def main():
         watchdog.cancel()
         if auth_watchdog:
             auth_watchdog.cancel()
+        if bed_poller:
+            bed_poller.cancel()
         ingest_server.close()
         await web_runner.cleanup()
         hub.close()

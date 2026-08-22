@@ -10,7 +10,7 @@ Pi #1..#N ──TCP 8765──▶ 本伺服器 ──http(s)://本機:8080（醫
 正式部署目標為醫院資訊室虛擬機（2026-08-10 會議定案）：Windows Server 2025、
 內部 DNS `ventmonitor.csh.org.tw`、web 走 443 + TLS（院內 CA 簽發憑證）、
 Pi 走 csh-device 網段、看板端走 csh-staff-s；登入未來改接 HIS 帳密（介接規格待資訊室提供，
-目前先用本機帳號）。細節見 IMPROVEMENT_PLAN.md 第八節。
+目前先用本機帳號）。細節見 IMPROVEMENT_PLAN.md 第七節。
 
 跨平台：Windows / macOS / Linux 皆可執行，僅相依 Python 3.9+ 與 aiohttp。
 
@@ -95,6 +95,12 @@ New-NetFirewallRule -DisplayName "RespiraMark web"    -Direction Inbound -Protoc
 | `sys_retention_days` | 7 | 系統狀態保存天數 |
 | `alarm_db_path` | `alarm_logs/alarm_history.sqlite3` | 相對 `log_dir` 的警報歷史 SQLite；畫面與匯出仍可依機台獨立查詢 |
 | `alarm_retention_days` | 7 | 已結束警報保留天數；仍在作用中的警報不會因超過期限被刪除 |
+| `maya_enabled` | false | 是否啟用床號自動帶入（見下節）。**這是本系統唯一會主動對外發請求的功能**，對象是院方正式系統，所以預設關閉 |
+| `maya_url` | 院方 getDeviceList | 設備清單查詢網址；本機測試改指向 `tools/fake_maya.py` |
+| `maya_poll_interval` | 30 | 秒，查詢間隔（沒有待查裝置時完全不發請求） |
+| `maya_timeout` | 10 | 秒，單次查詢逾時 |
+| `maya_max_duration` | 3600 | 秒，單台自呼吸器連線起算的查詢時限，逾時放棄 |
+| `maya_time_tolerance` | 120 | 秒，時間比較的寬容值（見 PROTOCOL.md，方向刻意偏向接受） |
 
 執行期檔案集中於 `logs/`：`server.log`、`audit.log`、`alarm_logs/alarm_history.sqlite3`、`sys_logs/sys_history.sqlite3`。警報與系統狀態都只保存本機最近 7 天且**不納入備份**；兩者皆不保存病人代碼、波形或量測值。Sys／Alarm CSV 都只在管理員下載時即時產生，伺服器端不留匯出檔。
 
@@ -126,6 +132,34 @@ python tools/make_device.py --disable --device pi-icu-01          # 懷疑外洩
 ```
 
 把顯示的 token 複製到該台 Pi 的 `telemetry.json` 的 `token` 欄位。`devices.json` 一旦存在，伺服器就改用這個模式；外洩或懷疑外洩時只需停用/換發該台，不影響其他 Pi（範本見 `devices.json.example`）。
+
+## 床號自動帶入（maya）
+
+看板卡片以床號為標題並依床號排序，床號**不是人工輸入的**，而是用該台的**呼吸器財編**
+去院方設備系統（maya）查出來的——醫療人員接機時會在 maya 上更新使用位置，這裡跟著它走。
+
+前置作業只有一件：在 `/admin` 幫每台登記**財編**（沒有財編就查不了）。之後的流程全自動：
+
+1. 呼吸器接上（Pi 送出 `status: connected`）→ 該台開始每 30 秒查一次
+2. 查到的紀錄時間比「接機時刻」新 → 採用床號、停止查詢，看板立刻換標題與重新排序
+3. 查到的還是上一位病人的舊紀錄 → 繼續查，最多查一小時就放棄（不對院方系統無止境發請求）
+4. 呼吸器斷線就停查；Pi 離線只是暫停，回來會接續
+
+🚨 **只取床號，姓名與病歷號在解析當下就丟棄**——不留存、不廣播、不寫 log。床號不是個資，
+另外兩個是。畫面上的病歷號一律來自床邊輸入，跟 maya 無關。完整規則見 PROTOCOL.md。
+
+### 本機演練（不要打院方正式系統）
+
+```bash
+python tools/fake_maya.py --asset 27943 --bed CCU18 --stale-for 60
+```
+
+`config.json` 設 `"maya_enabled": true` 並把 `maya_url` 指向
+`http://127.0.0.1:8899/RCS_CSH/api/System/getDeviceList?pShowDel=false`，再跑一台
+`fake_pi.py`（該台在 `/admin` 的財編要填 `27943`）。前 60 秒假伺服器回「一天前的舊紀錄」，
+看板顯示機台編號；60 秒後改回「現在」，下一輪查詢就會換成 CCU18。
+
+⚠️ 對真實 maya 的第一次連通測試請在院內自行執行——本專案的自動化測試一律只打本地假伺服器。
 
 ## 升級相依套件
 

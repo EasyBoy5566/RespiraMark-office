@@ -72,6 +72,16 @@ class TelemetryHub:
         self.devices = {}          # device_id -> DeviceState
         self.viewers = set()       # 每個瀏覽器一個 asyncio.Queue
         self._seq = 0
+        # 床號自動帶入掛件（可為 None = 未啟用），見 attach_bed_sync()
+        self.bed_sync = None
+
+    def attach_bed_sync(self, bed_sync):
+        """掛上床號自動帶入（domain/bed_sync.py）。
+
+        不在建構子注入是因為 BedSync 需要 Hub 的 set_device_meta 與 is_online
+        才能建立——先有 Hub 才有 BedSync，順序上只能在事後掛。
+        """
+        self.bed_sync = bed_sync
 
     # ── Pi 端事件（由 ingest 呼叫）──────────────────────────────────
 
@@ -97,6 +107,8 @@ class TelemetryHub:
         # 資安規則：病人代碼只顯示在儀表板畫面，禁止寫入 log
         self.log.info(f"裝置上線: {device}（版本 {st.app_version or '未提供'}）")
         audit("device_online", device=device, app_version=st.app_version or "-")
+        if self.bed_sync is not None:
+            self.bed_sync.on_hello(device)   # 新連線 → 下一則呼吸器連線視為新的接機
         self.broadcast(self._link_online(st))
         return device, st.conn_seq
 
@@ -125,6 +137,9 @@ class TelemetryHub:
                 self._append_sys_log(st, msg)  # 七天 SQLite；CSV 僅在下載時產生
             elif t == "alarm":
                 self.alarm_log.on_alarm(device, msg.get("alarms", []), msg.get("ts"))
+            elif t == "status" and self.bed_sync is not None:
+                # 呼吸器接上病人 = 可能換了新病人 → 開始（或停止）查床號
+                self.bed_sync.on_status(device, str(msg.get("state") or ""))
         elif t not in STREAM_TYPES:
             self.log.info(f"{device} 未知訊息類型（忽略）: {t}")
             return
@@ -159,6 +174,8 @@ class TelemetryHub:
             return "online"
         del self.devices[device]
         self.alarm_log.forget(device)
+        if self.bed_sync is not None:
+            self.bed_sync.forget(device)
         self.log.info(f"管理員移除離線裝置: {device}")
         audit("device_removed", device=device)
         self.broadcast({"type": "device_removed", "device": device})
@@ -203,6 +220,11 @@ class TelemetryHub:
                     self.log.warning(f"裝置逾時離線: {st.device}")
                     audit("device_offline", device=st.device, reason="timeout")
                     self.broadcast({"type": "link", "device": st.device, "online": False})
+
+    def is_online(self, device: str) -> bool:
+        """該裝置目前是否在線上（床號查詢用來判斷要不要暫停該台）。"""
+        st = self.devices.get(device)
+        return bool(st and st.online)
 
     def device_count(self) -> int:
         """目前追蹤的裝置數（含離線；供 /healthz 用，不含任何裝置名稱/病人資訊）"""

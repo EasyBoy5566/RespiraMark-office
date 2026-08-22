@@ -46,6 +46,20 @@ DEFAULTS = {
     "alarm_db_path": "alarm_logs/alarm_history.sqlite3",
     # 已結束警報保留天數；作用中的警報不會因期限而刪除
     "alarm_retention_days": 7,
+    # ── 床號自動帶入：向院方設備系統 maya 查財編對應的床號（見 PROTOCOL.md）──
+    # ⚠️ 這是本系統唯一會主動對外發請求的功能，對象是院方**正式系統**。
+    # 預設 false：開發環境一律打 tools/fake_maya.py 假伺服器，絕不探測 maya-ap。
+    "maya_enabled": False,
+    "maya_url": ("http://maya-ap.csh.org.tw/RCS_CSH/api/System/"
+                 "getDeviceList?pShowDel=false"),
+    "maya_poll_interval": 30.0,   # 秒，查詢間隔（沒有待查裝置時完全不發請求）
+    "maya_timeout": 10.0,         # 秒，單次查詢逾時
+    # 秒，單台自呼吸器連線起算的查詢時限；逾時仍無較新紀錄就放棄，
+    # 不對院方正式系統無止境發請求
+    "maya_max_duration": 3600.0,
+    # 秒，時間比較的寬容值：記錄時間 ≥ A − 容差即視為新資料。方向刻意偏向
+    # 「接受」——時鐘靠 NTP 對齊、醫護也常在接機前就先更新 maya（見 PROTOCOL.md）
+    "maya_time_tolerance": 120.0,
     # ── TLS 加密（tools/make_certs.py 產生憑證；兩者皆填才啟用，網頁與 ingest 同時加密）──
     "tls_cert": "",           # 伺服器憑證，例如 "certs/server.pem"（相對專案根目錄）
     "tls_key": "",            # 伺服器私鑰，例如 "certs/server.key"
