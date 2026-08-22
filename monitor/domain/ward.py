@@ -85,3 +85,30 @@ def from_bed(bed) -> str:
         return FLOOR_TO_WARD.get(match.group(1), GENERAL_WARD)
 
     return ""
+
+
+# ── 單位分組（看板篩選選單的分類）────────────────────────────────────
+# 加護單位代碼由使用者於 2026-08-22 指定。這是**唯一**寫死代碼的地方，
+# 而且只影響選單裡「這一項排在哪一組」，不影響比對、篩選或顯示：
+# 沒列到的代碼（例如燒傷加護 BC、IR、BR）會落到「病房」組，
+# 該台機器照常出現在看板與選單裡，只是分組分得比較粗。
+# 這跟 from_bed() 刻意不寫死清單並不衝突——那裡寫死會讓機器整台消失，
+# 這裡寫死最壞只是分錯組。
+ICU_WARDS = frozenset({"MI", "CCU", "SI", "RCC", "PI", "NI"})
+
+GROUP_ICU = "icu"        # 加護病房
+GROUP_WARD = "ward"      # 一般病房
+GROUP_NONE = ""          # 未指定（沒有床號）
+
+
+def group_of(ward) -> str:
+    """單位代碼 → 分組（`icu`／`ward`／`""`）。
+
+    給看板的篩選選單分兩區用。空字串代表未指定，前端把它獨立成一項——
+    剛配對還沒查到床號的機器就是這一類，預設必須是顯示的，否則它會
+    無聲無息地從看板消失。
+    """
+    ward = str(ward or "").strip().upper()
+    if not ward:
+        return GROUP_NONE
+    return GROUP_ICU if ward in ICU_WARDS else GROUP_WARD

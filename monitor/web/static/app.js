@@ -116,6 +116,187 @@ function applyCols(n) {
   relayoutParamStrips();            // 欄寬改變 → 重排單列設定值，過窄時整列隱藏
 }
 
+// ── 單位篩選（勾選要顯示的單位；選擇存 localStorage）──────────────────
+// 單位由伺服器從床號推導後隨 snapshot／device_meta 送來（ward + ward_group），
+// 前端只負責顯示與篩選（CLAUDE.md §5：前端不得包含業務規則）。
+//
+// **存的是「不顯示」的集合，不是「要顯示」的集合。** 選單本身是正向的
+// （打勾＝顯示），但記錄反過來存，這樣新出現的單位一律預設顯示：某天第一次
+// 有呼吸器推到從沒出現過的單位時，它不會因為不在已存清單裡就悄悄不見。
+// 看板漏一床的代價，遠大於多顯示一床。
+// 「未指定」在選單與集合中的內部代號。刻意用不可能與單位代碼相撞的字串：
+// 單位是 [A-Z]+ 或 N15 這類代碼，或「一般病房」。
+const UNASSIGNED = "__unassigned__";
+const wardBtn = document.getElementById("wardBtn");
+const wardPanel = document.getElementById("wardPanel");
+const wardPanelBody = document.getElementById("wardPanelBody");
+const filterPeek = document.getElementById("filterPeek");
+const hiddenWards = new Set();
+
+try {
+  const saved = JSON.parse(localStorage.getItem("rm-hidden-wards") || "[]");
+  if (Array.isArray(saved)) saved.forEach((w) => hiddenWards.add(w));
+} catch (e) { /* 私密瀏覽或壞資料：當作沒有隱藏任何單位 */ }
+
+const wardKey = (dev) => dev.ward || UNASSIGNED;
+const isVisible = (dev) => !hiddenWards.has(wardKey(dev));
+
+/** 目前看板上出現過的單位 → {key, label, group}，依組別與代碼排序 */
+function knownWards() {
+  const seen = new Map();
+  for (const dev of devices.values()) {
+    const key = wardKey(dev);
+    if (!seen.has(key)) {
+      seen.set(key, {
+        key,
+        label: dev.ward || "未指定",
+        // 未指定自成一區；其餘用伺服器給的分組（沒給就當一般病房，不會消失）
+        group: key === UNASSIGNED ? "none" : (dev.wardGroup || "ward"),
+      });
+    }
+  }
+  return [...seen.values()].sort((a, b) => {
+    const order = { icu: 0, ward: 1, none: 2 };
+    return (order[a.group] - order[b.group]) || collate(a.label, b.label);
+  });
+}
+
+const GROUP_TITLES = { icu: "加護病房", ward: "病房", none: "" };
+
+function renderWardPanel() {
+  const wards = knownWards();
+  wardPanelBody.textContent = "";
+  if (!wards.length) {
+    const empty = document.createElement("div");
+    empty.className = "ward-panel-empty";
+    empty.textContent = "尚無裝置";
+    wardPanelBody.appendChild(empty);
+    return;
+  }
+  let currentGroup = null;
+  for (const ward of wards) {
+    if (ward.group !== currentGroup) {
+      currentGroup = ward.group;
+      if (GROUP_TITLES[currentGroup]) {
+        const title = document.createElement("div");
+        title.className = "ward-group-title";
+        title.textContent = GROUP_TITLES[currentGroup];
+        wardPanelBody.appendChild(title);
+      }
+    }
+    const row = document.createElement("label");
+    row.className = "ward-row";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !hiddenWards.has(ward.key);
+    box.addEventListener("change", () => {
+      if (box.checked) hiddenWards.delete(ward.key);
+      else hiddenWards.add(ward.key);
+      applyWardFilter();
+    });
+    const text = document.createElement("span");
+    text.textContent = ward.label;      // 單位字串一律 textContent，不用 innerHTML
+    const count = document.createElement("span");
+    count.className = "ward-count";
+    count.textContent = String([...devices.values()]
+      .filter((d) => wardKey(d) === ward.key).length);
+    row.append(box, text, count);
+    wardPanelBody.appendChild(row);
+  }
+}
+
+/** 套用篩選：隱藏卡片 → 重排 → 更新提示。改動篩選或裝置清單後都要呼叫。 */
+function applyWardFilter() {
+  try {
+    localStorage.setItem("rm-hidden-wards", JSON.stringify([...hiddenWards]));
+  } catch (e) { /* 私密瀏覽等，忽略 */ }
+  for (const dev of devices.values()) {
+    const visible = isVisible(dev);
+    dev.card.classList.toggle("filtered-out", !visible);
+    // 放大中的卡片被篩掉 → 先收回，否則整面 overlay 蓋著一張看不到的卡
+    if (!visible && dev.big) collapse(dev);
+  }
+  sortGrid();
+  updateWardFilterUi();
+}
+
+function updateWardFilterUi() {
+  const total = devices.size;
+  const hidden = [...devices.values()].filter((d) => !isVisible(d)).length;
+  const shown = [...knownWards()].filter((w) => !hiddenWards.has(w.key));
+  const labels = shown.map((w) => w.label);
+  const filtering = hidden > 0;
+
+  wardBtn.textContent = !filtering
+    ? "單位：全部 ▾"
+    : `單位：${labels.length ? labels.slice(0, 2).join("、") : "無"}` +
+      `${labels.length > 2 ? ` +${labels.length - 2}` : ""} ▾`;
+  wardBtn.classList.toggle("active", filtering);
+
+  // 常駐提示：狀態列收起也看得到，避免把「被隱藏」誤認成「沒連上」
+  filterPeek.classList.toggle("hidden", !filtering);
+  if (filtering) {
+    filterPeek.textContent =
+      `單位篩選中：${labels.length ? labels.join("、") : "未選任何單位"}`
+      + `（已隱藏 ${hidden} 台）`;
+  }
+  updateEmptyHint(total, hidden);
+}
+
+/** 空畫面文案：全部被篩掉時要講實話，不能還顯示「等待裝置連線中」 */
+function updateEmptyHint(total, hidden) {
+  const nothingVisible = total === 0 || hidden === total;
+  emptyHint.classList.toggle("hidden", !nothingVisible);
+  // 監視器模式的格線底色（近白）會在沒有任何磚格時露出邊框 → 一併收掉 padding
+  grid.classList.toggle("is-empty", nothingVisible);
+  if (!nothingVisible) return;
+  emptyHint.textContent = "";
+  const main = document.createElement("div");
+  const hint = document.createElement("span");
+  hint.className = "hint";
+  if (total === 0) {
+    main.textContent = "等待裝置連線中";
+    hint.textContent = "設備端啟動監測後會自動出現在這裡";
+  } else {
+    main.textContent = `目前篩選條件下沒有裝置（共 ${total} 台被隱藏）`;
+    hint.textContent = "請由上方「單位」選單勾選要顯示的單位";
+  }
+  emptyHint.append(main, hint);
+}
+
+// 面板開著時把狀態列鎖在展開狀態，否則滑鼠一離開 header 就整條收掉、面板跟著不見
+function setWardPanelOpen(open) {
+  wardPanel.classList.toggle("hidden", !open);
+  wardBtn.setAttribute("aria-expanded", String(open));
+  if (autoHideHeader) autoHideHeader.classList.toggle("is-pinned", open);
+  if (open) renderWardPanel();
+}
+
+wardBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setWardPanelOpen(wardPanel.classList.contains("hidden"));
+});
+wardPanel.addEventListener("click", (e) => e.stopPropagation());
+wardPanel.querySelectorAll("[data-select-all]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    hiddenWards.clear();
+    if (btn.dataset.selectAll === "0") {
+      knownWards().forEach((w) => hiddenWards.add(w.key));
+    }
+    renderWardPanel();
+    applyWardFilter();
+  });
+});
+document.addEventListener("click", () => {
+  if (!wardPanel.classList.contains("hidden")) setWardPanelOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !wardPanel.classList.contains("hidden")) {
+    setWardPanelOpen(false);
+    wardBtn.blur();
+  }
+});
+
 let headerDismissTimer = null;
 function dismissAutoHideHeader() {
   colsSelect.blur();                // select 的焦點不可繼續把狀態列鎖在展開狀態
@@ -217,12 +398,14 @@ function updateMuteBtn(dev) {
 // 取所有「線上、未靜音、有警報」裝置中最嚴重、同級優先值最高的警報鳴響；
 // 每段合成音完整播放後靜音 2.5 秒，屆時警報仍存在才重播。
 // Pi 離線後警報資料已不可信，不列入鳴響。
+// **被單位篩選隱藏的床也不鳴響**：聽得到卻在畫面上找不到來源的警報聲，
+// 比不響更糟——這台不在本站負責的單位裡（真正的臨床警報在呼吸器本體上）。
 setInterval(() => {
   let selected = null;
   for (const dev of devices.values()) {
     updateMuteBtn(dev);
     const alarm = dev.soundAlarm;
-    if (!dev.online || isMuted(dev) || !alarm) continue;
+    if (!dev.online || isMuted(dev) || !alarm || !isVisible(dev)) continue;
     if (!selected || alarm.level < selected.level
         || (alarm.level === selected.level && (alarm.prio || 0) > (selected.prio || 0))) {
       selected = alarm;
@@ -262,7 +445,13 @@ function ensureDev(id) {
     big: false,
     card: null,
     online: false,        // Pi ↔ 伺服器連線（由 link 訊息維護）
+    ventState: "",        // 呼吸器連線狀態（status.state；空 = 還沒收到過）
+    ventMsg: "",          // Pi 回報的狀態顯示文字（status.msg）
+    lastWaveAt: 0,        // 最後一批波形到達時間（ms）；判斷「無訊號」用
+    noSignalEl: null,     // 卡片中央的覆蓋文字（buildCard 填入）
     bed: "",              // 床號（伺服器裝置清冊；空字串 = 未指定）
+    ward: "",             // 單位（伺服器由床號推導；空字串 = 未指定）
+    wardGroup: "",        // 單位分組 icu／ward（只用於篩選選單分區）
     asset: "",            // 呼吸器財編（本頁不顯示，僅管理頁用）
     alarmLevel: 0,        // 目前最嚴重警報等級（0 = 無警報）
     soundAlarm: null,     // 目前拿來選擇警報等級的完整警報（含 cp/code/level/prio）
@@ -279,8 +468,7 @@ function ensureDev(id) {
   };
   buildCard(dev);
   devices.set(id, dev);
-  emptyHint.classList.add("hidden");
-  sortGrid();
+  applyWardFilter();       // 新裝置可能帶進新的單位 → 重算篩選、選單與空畫面提示
   return dev;
 }
 
@@ -382,11 +570,12 @@ function buildCard(dev) {
   const alarmBand = document.createElement("div");
   alarmBand.className = "wave-alarm hidden";
   waves.appendChild(alarmBand);
+  // 中央覆蓋文字：內容由 updateSignalOverlay 依呼吸器狀態與波形有無決定
   const noSignal = document.createElement("div");
   noSignal.className = "no-signal";
-  noSignal.textContent = "無訊號";
   noSignal.setAttribute("role", "status");
   card.querySelector(".monitor-main").appendChild(noSignal);
+  dev.noSignalEl = noSignal;
 
   dev.loopCanvas = card.querySelector(".loop-chart canvas");
   dev.loopEmpty = card.querySelector(".loop-empty");
@@ -417,9 +606,11 @@ function buildCard(dev) {
 
 function syncGridPlaceholders() {
   grid.querySelectorAll(".grid-placeholder").forEach((el) => el.remove());
-  if (!devices.size) return;
+  // 依**可見**卡片數補齊末列：被單位篩選隱藏的卡片不佔格線位置
+  const visible = [...devices.values()].filter(isVisible).length;
+  if (!visible) return;
 
-  const missing = (currentCols - (devices.size % currentCols)) % currentCols;
+  const missing = (currentCols - (visible % currentCols)) % currentCols;
   for (let i = 0; i < missing; i++) {
     const placeholder = document.createElement("div");
     placeholder.className = "grid-placeholder";
@@ -782,6 +973,7 @@ requestAnimationFrame(frame);
 // ── 訊息處理 ─────────────────────────────────────────────────────
 function onWave(dev, m) {
   if (!dev.online) return;
+  dev.lastWaveAt = Date.now();        // 「無訊號」的判斷依據（updateSignalOverlay）
   const nSamples = m.p.length;
   // 取樣率估計：用「發送端時間戳」的滑動視窗（不受網路到達抖動影響）
   const t = typeof m.ts === "number" ? m.ts : Date.now() / 1000;
@@ -802,55 +994,17 @@ function onWave(dev, m) {
   }
 }
 
-function clearLiveContent(dev) {
-  dev.queue.length = 0;
-  dev.tsWin.length = 0;
-  dev.acc = 0;
-  dev.pos = 0;
-  dev.valThrottle = 0;
-  for (const ch of dev.chans) {
-    ch.hist.length = 0;
-    ch.prevY = null;
-    ch.valEl.textContent = "";
-    if (ch.ctx) ch.ctx.clearRect(0, 0, ch.w, ch.h);
-  }
-
-  dev.loopStarted = false;
-  dev.loopCurrent = [];
-  dev.loopBreaths = [];
-  if (dev.loopCanvas) {
-    const ctx = dev.loopCanvas.getContext("2d");
-    if (ctx) ctx.clearRect(0, 0, dev.loopCanvas.width, dev.loopCanvas.height);
-  }
-
-  setPatient(dev, "");
-  dev.card.querySelector(".mode-line").textContent = "";
-  dev.card.querySelector(".dev-info-line").textContent = "";
-  dev.card.querySelector(".kv-table.measured").innerHTML = "";
-
-  const strip = dev.card.querySelector(".param-strip");
-  strip.innerHTML = "";
-  layoutParamStrip(strip);
-
-  dev.card.querySelector(".head-alarms").innerHTML = "";
-  const band = dev.card.querySelector(".wave-alarm");
-  band.innerHTML = "";
-  band.className = "wave-alarm hidden";
-  dev.card.classList.remove("alarming-1", "alarming-2", "alarming-3");
-  dev.alarmLevel = 0;
-  dev.soundAlarm = null;
-  dev.muteUntil = 0;
-  updateMuteBtn(dev);
-}
-
 function onLink(dev, m) {
-  // 離線資料已失去即時性：保留設備卡與位置，但清空所有即時內容。
+  // Pi 與伺服器斷線（關機、拔電、離開網路）→ **整張卡片移除**。
+  // 沒有連線就沒有這一床可看：留著一張永遠不會更新的卡只會佔版面，
+  // 也讓人分不清「這台沒在用」與「這台在用但沒訊號」。
+  // 裝置重新連上時 dispatch 會再建一張新的卡（見 ensureDev）。
+  // ⚠️ 副作用：使用中的 Pi 突然斷線時，那一床會直接從看板消失而不是變成警示卡
+  //    （2026-08-22 使用者指定的行為）。離線裝置仍完整列在 /admin 的設備總表。
   const wasOnline = dev.online;
   dev.online = !!m.online;
-  dev.card.classList.toggle("pi-offline", !dev.online);
   if (!dev.online) {
-    clearLiveContent(dev);
-    if (dev.big) collapse(dev);
+    destroyDev(dev);
     return;
   }
   if (!wasOnline) setupCanvases(dev);
@@ -860,6 +1014,38 @@ function onLink(dev, m) {
 function setPatient(dev, patient) {
   dev.card.querySelector(".patient").textContent = patient ? `病歷號: ${patient}` : "";
 }
+
+// ── 波形訊號狀態（卡片中央的覆蓋文字）────────────────────────────
+// 卡片存在 = Pi 一定在線上（離線的卡已被 destroyDev 移除），所以這裡只需要
+// 分辨 Pi 與**呼吸器**之間的兩種情形：
+//   呼吸器已連線但波形沒進來 → 「無訊號」
+//   呼吸器未連線（沒接、拔掉、還在重連）→ 顯示 Pi 回報的狀態文字
+// 波形正常流動時不顯示任何覆蓋文字。
+const NO_SIGNAL_AFTER_MS = 3000;   // 波形每 ~150ms 一批；3 秒沒進來就算斷了
+const VENT_CONNECTED = "connected";
+
+function onStatus(dev, m) {
+  dev.ventState = String(m.state || "");
+  dev.ventMsg = String(m.msg || "");
+  updateSignalOverlay(dev);
+}
+
+function updateSignalOverlay(dev) {
+  const el = dev.noSignalEl;
+  if (!el) return;
+  // 還沒收到任何 status 就當作呼吸器已連線：Pi 只在狀態「變化」時才送，
+  // 剛連上還沒變化過的裝置不該被誤標成「呼吸器未連線」。
+  const ventConnected = !dev.ventState || dev.ventState === VENT_CONNECTED;
+  const stale = Date.now() - dev.lastWaveAt > NO_SIGNAL_AFTER_MS;
+  let text = "";
+  if (!ventConnected) text = dev.ventMsg || "呼吸器未連線";
+  else if (stale) text = "無訊號";
+  el.textContent = text;
+  dev.card.classList.toggle("no-signal-on", !!text);
+}
+
+// 波形是「持續流動」的東西，沒有「停止」事件可聽 → 只能定時檢查最後到達時間
+setInterval(() => devices.forEach(updateSignalOverlay), 500);
 
 // ── 小卡設定值單列排版 ───────────────────────────────────────────
 // 每個模式收到的 settings 數量不同（例如 PSV 可只有 3 個設定）；不可假設固定欄數。
@@ -1216,6 +1402,8 @@ function onDeviceInfo(dev, m) {
 // dataset.bed 是排序的依據，所以改完一定要重排。
 function applyDeviceMeta(dev, m) {
   dev.bed = m.bed || "";
+  dev.ward = m.ward || "";
+  dev.wardGroup = m.ward_group || "";
   dev.asset = m.asset || "";
   dev.card.dataset.bed = dev.bed;
   renderDevName(dev);
@@ -1225,39 +1413,47 @@ function onDeviceMeta(m) {
   const dev = devices.get(m.device);
   if (!dev) return;                  // 還沒連過線的裝置不在看板上
   applyDeviceMeta(dev, m);
-  sortGrid();
+  // 床號變了單位就可能跟著變（例如 maya 帶入床號後從「未指定」變成 CCU），
+  // 篩選結果與選單都要跟著更新
+  applyWardFilter();
 }
 
-function onDeviceRemoved(id) {
-  const dev = devices.get(id);
-  if (!dev) return;
+/** 從看板上拿掉一張卡（Pi 離線或管理員移除裝置共用同一條路）。
+ *  裝置之後重新連上時會由 ensureDev 重建，不需要保留任何殘留狀態。 */
+function destroyDev(dev) {
   if (dev.big) {
     overlay.classList.add("hidden");
     document.body.classList.remove("detail-open");
   }
   if (paramCardResizeObserver) paramCardResizeObserver.unobserve(dev.card);
   dev.card.remove();
-  devices.delete(id);
-  sortGrid();
-  if (!devices.size) emptyHint.classList.remove("hidden");
+  devices.delete(dev.id);
+  applyWardFilter();       // 少一台後該單位可能整個消失 → 選單與提示一併更新
+}
+
+function onDeviceRemoved(id) {
+  const dev = devices.get(id);
+  if (dev) destroyDev(dev);
 }
 
 // 訊息類型 → 處理函式（新增有狀態類型：加一行 + 寫 onXxx，snapshot 自動生效）
-// 注意：sys（Pi 機器健康狀態）與 status（呼吸器連線狀態）只在管理頁顯示，
-// 本頁刻意不註冊 → 走未知類型忽略
+// 注意：sys（Pi 機器健康狀態）只在管理頁顯示，本頁刻意不註冊 → 走未知類型忽略。
+// status（Pi ↔ 呼吸器的串口狀態）本頁要用來判斷「無訊號」與「呼吸器未連線」
 const MSG_HANDLERS = {
-  wave: onWave, link: onLink,
+  wave: onWave, link: onLink, status: onStatus,
   params: onParams, device_info: onDeviceInfo, alarm: onAlarm,
 };
-const SNAPSHOT_KEYS = ["params", "device_info", "alarm"];
+const SNAPSHOT_KEYS = ["params", "device_info", "alarm", "status"];
 
 function dispatch(m) {
   if (m.type === "snapshot") {
     for (const d of m.devices || []) {
+      // 離線裝置不建卡：snapshot 會帶上所有曾經連過的裝置（含關機中的 Pi），
+      // 它們在看板上不該有位置（見 onLink）
+      if (!d.online) continue;
       const dev = ensureDev(d.device);
       applyDeviceMeta(dev, d);
       onLink(dev, { online: d.online, patient: d.patient });
-      if (!dev.online) continue;       // snapshot 可能仍含離線前的最後資料，不可重新顯示
       for (const k of SNAPSHOT_KEYS) {
         if (d[k]) MSG_HANDLERS[k](dev, d[k]);
       }

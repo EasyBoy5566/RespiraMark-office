@@ -147,7 +147,7 @@ Pi ◀── {"status":"approved", "token": ...} 一次性領取 → 寫 telemet
 | `token_hash` | 存取權杖的 PBKDF2 雜湊 |
 | `enabled` | 是否啟用；false 時該裝置一律拒絕連線 |
 | `note` | 管理員備註（自由文字） |
-| `bed` | 床號，例 `MI09`；空字串 = 未帶入（目前一律為空，見上） |
+| `bed` | 床號，例 `MI09`；由 maya 自動帶入（見下），空字串 = 尚未帶入 |
 | `asset` | 呼吸器財編；空字串 = 未設定 |
 
 ### 床號自動帶入（院方設備系統 maya）
@@ -196,7 +196,14 @@ Pi ◀── {"status":"approved", "token": ...} 一次性領取 → 寫 telemet
 
 看板要能「只顯示某幾個單位的呼吸器」，管理頁要能看出「這台在哪個單位」。單位**不另外儲存**：它是床號推導出來的，多存一份只會多一份會過期的資料。伺服器在組 `snapshot`／`device_meta` 時算好一併送出，前端只負責顯示與篩選（CLAUDE.md §5：前端不得包含業務規則）。
 
-床號有兩種格式，規則見 `monitor/domain/ward.py`。
+床號有兩種格式，規則見 `monitor/domain/ward.py`。單位另附一個 **`ward_group`** 欄位供看板
+的篩選選單分區顯示：`icu`（加護病房：MI、CCU、SI、RCC、PI、NI）、`ward`（其他病房）、
+`""`（未指定，沒有床號）。
+
+⚠️ `ward_group` 的加護代碼清單是**唯一寫死的地方**，而且只影響「選單裡排在哪一區」——
+不影響比對、篩選或顯示。沒列到的代碼（燒傷加護 `BC`、`IR`、`BR` 等）會落在 `ward` 組，
+機器照常出現在看板與選單裡，只是分組分得粗一點。這跟 `from_bed()` 刻意不寫死清單不衝突：
+那裡寫死會讓機器整台從看板消失，這裡寫死最壞只是分錯區。
 
 **加護／特殊單位**——病房代碼直接寫在床號開頭，取**開頭的連續英文字母**：
 
@@ -225,7 +232,7 @@ Pi ◀── {"status":"approved", "token": ...} 一次性領取 → 寫 telemet
 請求：`{"bed": "RCC-01", "asset": "A-123456"}`
 兩個欄位都選填（省略者保留原值，傳空字串則清除），上限各 32 字元。
 
-- 200：`{"device": ..., "bed": ..., "asset": ...}`，同時對所有觀看端廣播 `device_meta`。
+- 200：`{"device": ..., "bed": ..., "ward": ..., "ward_group": ..., "asset": ...}`，同時對所有觀看端廣播 `device_meta`。
 - 404 `{"error": "裝置未登記"}`：`devices.json` 中沒有這台（尚未配對）。
 - 409 `{"error": "..."}`：伺服器尚未啟用逐台裝置驗證（見上方警告）。
 - 500 `{"error": "devices.json 寫入失敗"}`。
@@ -313,10 +320,10 @@ Pi 的訊息原樣轉發，外加 `"device"` 欄位標記來源。伺服器另�
 
 | type | 說明 |
 |---|---|
-| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online`/`bed`/`ward`/`asset`/`connected_at`/`app_version` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`/`sys`）的最新一則 |
+| `snapshot` | 瀏覽器剛連上時送一次：`devices` 陣列，每台含 `device`/`patient`/`online`/`bed`/`ward`/`ward_group`/`asset`/`connected_at`/`app_version` 與各「有狀態類型」（`status`/`device_info`/`params`/`alarm`/`sys`）的最新一則 |
 | `link` | Pi 與伺服器的連線狀態：`online` true/false（上線時附 `patient`、`connected_at`、`app_version`）。注意這與 `status`（Pi 與呼吸器的串口狀態）是兩件事 |
 | `device_removed` | 管理員從管理頁移除離線裝置時廣播：`device` 機台編號。所有觀看端（儀表板與管理頁）應移除該裝置的畫面元素 |
-| `device_meta` | 管理員改了床號／財編時廣播：`device`、`bed`、`ward`（由床號推導）、`asset`。儀表板據此即時更新卡片標題與排序，不需重新整理 |
+| `device_meta` | 床號／財編變動時廣播（管理員登記財編、或床號自 maya 帶入）：`device`、`bed`、`ward`（由床號推導）、`ward_group`（單位分組）、`asset`。儀表板據此即時更新卡片標題、排序與單位篩選，不需重新整理 |
 
 `sys` 亦原樣轉發（加 `device`）。趨勢圖歷史另走 HTTP（不佔 WebSocket）：
 

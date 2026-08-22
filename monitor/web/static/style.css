@@ -85,7 +85,8 @@
   padding: var(--tile-gap);                /* 與內網格同粗的四周外框 */
   background: var(--tile-line);
 }
-[data-theme="mono"] main#grid:empty { padding: 0; }
+[data-theme="mono"] main#grid:empty,
+[data-theme="mono"] main#grid.is-empty { padding: 0; }   /* 無卡片或全被單位篩選隱藏 */
 [data-theme="mono"] .card { border: none; border-radius: 0; }
 [data-theme="mono"] .card:hover { background: var(--hover); }
 [data-theme="mono"] .grid-placeholder {
@@ -159,6 +160,77 @@ header.auto-hide:has(:focus-visible) {
 #top-peek:hover + header.auto-hide.is-dismissed,
 header.auto-hide.is-dismissed {
   transform: translateY(-100%);
+}
+/* 單位篩選面板打開期間鎖住展開狀態（放在 .is-dismissed 之後才蓋得過它）。 */
+header.auto-hide.is-pinned {
+  transform: translateY(0);
+}
+
+/* ── 單位篩選（勾選要顯示的單位）──────────────────────────────────
+   面板打開時 app.js 會給 header 加 .is-pinned 把狀態列鎖在展開狀態，
+   否則滑鼠一離開 header 就整條收掉、面板跟著消失。 */
+.ward-filter { position: relative; display: inline-flex; }
+.ward-btn {
+  font-size: 14px;
+  color: var(--text-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.ward-btn:hover { border-color: var(--hover); }
+.ward-btn:focus-visible { outline: none; border-color: var(--focus); }
+/* 篩選生效中 → 按鈕本身也要看得出來，不能只靠使用者記得 */
+.ward-btn.active { color: var(--amber); border-color: var(--amber); }
+.ward-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20;
+  min-width: 200px; max-height: 60vh; overflow-y: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.ward-panel-head { display: flex; gap: 6px; padding: 2px 4px 6px; }
+.ward-mini {
+  flex: 1; font-size: 12px; cursor: pointer;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  padding: 2px 0;
+}
+.ward-mini:hover { border-color: var(--hover); color: var(--text-primary); }
+.ward-group-title {
+  font-size: 11px; color: var(--text-label);
+  padding: 6px 4px 2px;
+  border-top: 1px solid var(--divider);
+  margin-top: 4px;
+}
+.ward-panel-body > .ward-group-title:first-child { border-top: none; margin-top: 0; }
+.ward-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 5px; cursor: pointer;
+  font-size: 14px; color: var(--text-primary);
+}
+.ward-row:hover { background: var(--hover); }
+.ward-row input { cursor: pointer; }
+.ward-count { margin-left: auto; font-size: 12px; color: var(--text-label); }
+.ward-panel-empty { padding: 8px; font-size: 13px; color: var(--text-label); }
+
+/* 被篩選隱藏的卡片：整張從格線移除（不是變透明），否則會佔著版面 */
+.card.filtered-out { display: none; }
+
+/* 常駐提示：狀態列收起也看得到。pointer-events:none 讓它不擴大頂端感應區，
+   免得滑鼠經過就把狀態列拉下來。 */
+.filter-peek {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  margin-left: 40px;                     /* 讓開 #top-peek::after 的把手 */
+  pointer-events: none; white-space: nowrap;
+  font-size: 12px; line-height: 1.5;
+  color: var(--on-amber); background: var(--amber);
+  padding: 1px 10px; border-radius: 0 0 6px 6px;
 }
 
 /* 欄數選擇器（header 狀態區）：切換每列卡片數；密度依欄數自動分級（見 app.js applyCols）*/
@@ -264,14 +336,6 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 }
 .card:hover { border-color: var(--hover); }
 /* 離線時保留卡片與設備名稱，但即時內容全部留白；不以紅框或變暗顯示過期資料。 */
-.card.pi-offline { cursor: default; }
-.card.pi-offline:hover { border-color: var(--divider); }
-[data-theme="mono"] .card.pi-offline:hover { background: var(--card-bg); }
-.card.pi-offline .wave-row,
-.card.pi-offline .mute-btn,
-.card.pi-offline .strip-cap { visibility: hidden; }
-.card.pi-offline.big .detail,
-.card.pi-offline.big .detail-lower { visibility: hidden; }
 
 .card-head {
   display: flex; align-items: center; gap: 8px;
@@ -332,27 +396,27 @@ main#grid[data-density="compact"] .mute-btn { width: 32px; height: 20px; font-si
 .mute-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .mute-btn.muted { color: var(--text-label); }
 
-/* 警示外框 + 頂端列同色；離線卡已清除警報，:not(.pi-offline) 再防止事件交錯時殘留顏色。
+/* 警示外框 + 頂端列同色。
  * 頂端列變警報色後，其上文字改用對比色（--on-red / --on-amber / --on-blue）確保可讀 */
 /* 邊框寬度固定（見 .card 一律 2px），警報只換色 → 尺寸不變、不會把鄰卡推移 */
 .card.alarming-1 { border-color: var(--red); }
 .card.alarming-2 { border-color: var(--amber); }
 .card.alarming-3 { border-color: var(--blue); }
-.card.alarming-1:not(.pi-offline) .card-head { background: var(--red); }
-.card.alarming-2:not(.pi-offline) .card-head { background: var(--amber); }
-.card.alarming-3:not(.pi-offline) .card-head { background: var(--blue); }
-.card.alarming-1:not(.pi-offline) .card-head .dev-name,
-.card.alarming-1:not(.pi-offline) .card-head .patient,
-.card.alarming-1:not(.pi-offline) .card-head .alarm-item,
-.card.alarming-1:not(.pi-offline) .card-head .mute-btn { color: var(--on-red); }
-.card.alarming-2:not(.pi-offline) .card-head .dev-name,
-.card.alarming-2:not(.pi-offline) .card-head .patient,
-.card.alarming-2:not(.pi-offline) .card-head .alarm-item,
-.card.alarming-2:not(.pi-offline) .card-head .mute-btn { color: var(--on-amber); }
-.card.alarming-3:not(.pi-offline) .card-head .dev-name,
-.card.alarming-3:not(.pi-offline) .card-head .patient,
-.card.alarming-3:not(.pi-offline) .card-head .alarm-item,
-.card.alarming-3:not(.pi-offline) .card-head .mute-btn { color: var(--on-blue); }
+.card.alarming-1 .card-head { background: var(--red); }
+.card.alarming-2 .card-head { background: var(--amber); }
+.card.alarming-3 .card-head { background: var(--blue); }
+.card.alarming-1 .card-head .dev-name,
+.card.alarming-1 .card-head .patient,
+.card.alarming-1 .card-head .alarm-item,
+.card.alarming-1 .card-head .mute-btn { color: var(--on-red); }
+.card.alarming-2 .card-head .dev-name,
+.card.alarming-2 .card-head .patient,
+.card.alarming-2 .card-head .alarm-item,
+.card.alarming-2 .card-head .mute-btn { color: var(--on-amber); }
+.card.alarming-3 .card-head .dev-name,
+.card.alarming-3 .card-head .patient,
+.card.alarming-3 .card-head .alarm-item,
+.card.alarming-3 .card-head .mute-btn { color: var(--on-blue); }
 
 /* ── 小卡警報（疊在波形區上方，從 Paw 頂端往下堆疊；放大檢視改用 header 完整清單）───
  * 每則警報一條半透明色帶（依自身分級上色），多則往下排、會蓋到下方 Flow/Vol 波形；
@@ -392,7 +456,7 @@ main#grid[data-density="compact"] .wave-alarm .band-row { font-size: 11px; paddi
   letter-spacing: 0.12em;
   pointer-events: none;
 }
-.card.pi-offline .no-signal { display: flex; }
+.card.no-signal-on .no-signal { display: flex; }
 main#grid[data-density="mid"] .no-signal { font-size: 14px; }
 main#grid[data-density="compact"] .no-signal { font-size: 13px; }
 .card.big .no-signal { display: none !important; }

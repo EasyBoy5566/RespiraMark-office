@@ -55,7 +55,7 @@ class DeviceDirectoryTest(unittest.TestCase):
         self.assertEqual(self.dir.all_meta(), {})
         self.assertFalse(self.dir.has_device("pi-01"))
         self.assertEqual(self.dir.meta("pi-01"),
-                         {"bed": "", "ward": "", "asset": "", "note": ""})
+                         {"bed": "", "ward": "", "ward_group": "", "asset": "", "note": ""})
         self.assertFalse(os.path.exists(self.path))   # 讀取不得建檔
 
     def test_set_meta_refuses_to_create_registry(self):
@@ -75,7 +75,8 @@ class DeviceDirectoryTest(unittest.TestCase):
         self.write([self.entry("pi-01")])
         result, data = self.dir.set_meta("pi-01", bed="RCC-01", asset="A-123")
         self.assertEqual(result, "ok")
-        self.assertEqual(data, {"device": "pi-01", "bed": "RCC-01", "ward": "RCC", "asset": "A-123"})
+        self.assertEqual(data, {"device": "pi-01", "bed": "RCC-01", "ward": "RCC",
+                                "ward_group": "icu", "asset": "A-123"})
 
         d = self.read()[0]
         self.assertEqual((d["bed"], d["asset"]), ("RCC-01", "A-123"))
@@ -116,7 +117,8 @@ class DeviceDirectoryTest(unittest.TestCase):
         self.write([self.entry("pi-01", bed="RCC-01", asset="A-1", note="ICU")])
         metas = self.dir.all_meta()
         self.assertEqual(metas["pi-01"],
-                         {"bed": "RCC-01", "ward": "RCC", "asset": "A-1", "note": "ICU"})
+                         {"bed": "RCC-01", "ward": "RCC", "ward_group": "icu",
+                          "asset": "A-1", "note": "ICU"})
         self.assertNotIn("hash-of-pi-01", json.dumps(metas))
 
     def test_corrupt_file_is_treated_as_empty(self):

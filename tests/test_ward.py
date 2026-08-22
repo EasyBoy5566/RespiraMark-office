@@ -22,7 +22,7 @@ import unittest
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
-from monitor.domain.ward import GENERAL_WARD, from_bed
+from monitor.domain.ward import GENERAL_WARD, from_bed, group_of
 
 
 class IcuWardTest(unittest.TestCase):
@@ -109,6 +109,41 @@ class EdgeCaseTest(unittest.TestCase):
 
     def test_whitespace_trimmed(self):
         self.assertEqual(from_bed("  CCU03  "), "CCU")
+
+
+class WardGroupTest(unittest.TestCase):
+    """單位分組（看板篩選選單分兩區用）"""
+
+    def test_icu_wards(self):
+        for unit in ("MI", "CCU", "SI", "RCC", "PI", "NI"):
+            self.assertEqual(group_of(unit), "icu", unit)
+
+    def test_general_wards(self):
+        for unit in ("N14", "N15", "R07", "R11", "M08", "MP06", GENERAL_WARD):
+            self.assertEqual(group_of(unit), "ward", unit)
+
+    def test_unassigned(self):
+        for unit in ("", "   ", None):
+            self.assertEqual(group_of(unit), "")
+
+    def test_unknown_code_falls_into_ward_not_lost(self):
+        """沒列在加護清單裡的代碼（燒傷加護 BC、IR、BR、安寧 HP）歸「病房」組。
+
+        重點不是分得準，是**不能消失**：分組只影響選單裡排在哪一區，
+        機器照常出現在看板與篩選選單中。
+        """
+        for unit in ("BC", "IR", "BR", "HP", "ZZ"):
+            self.assertEqual(group_of(unit), "ward", unit)
+
+    def test_group_matches_from_bed_output(self):
+        """實際床號一路推到分組（兩個函式串起來不能對不上）"""
+        for bed, expected in [("MI09", "icu"), ("CCU18", "icu"), ("RCC21", "icu"),
+                              ("3520-1", "ward"), ("0711-1", "ward"),
+                              ("BC02", "ward"), ("HP13-1", "ward"), ("", "")]:
+            self.assertEqual(group_of(from_bed(bed)), expected, bed)
+
+    def test_case_insensitive(self):
+        self.assertEqual(group_of("mi"), "icu")
 
 
 if __name__ == "__main__":

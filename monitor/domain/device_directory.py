@@ -66,8 +66,10 @@ class DeviceDirectory:
         `ward` 由床號推導，不是獨立欄位——單位只有一個真相來源（床號），
         存兩份只會多一份會過期的資料（見 monitor/domain/ward.py）。"""
         bed = str(d.get("bed") or "")
+        unit = ward.from_bed(bed)
         return {"bed": bed,
-                "ward": ward.from_bed(bed),
+                "ward": unit,
+                "ward_group": ward.group_of(unit),
                 "asset": str(d.get("asset") or ""),
                 "note": str(d.get("note") or "")}
 
@@ -107,7 +109,9 @@ class DeviceDirectory:
                 # 不屬於 API 回應也不該廣播出去
                 meta = self._meta_of(d)
                 return "ok", {"device": device_id, "bed": meta["bed"],
-                              "ward": meta["ward"], "asset": meta["asset"]}
+                              "ward": meta["ward"],
+                              "ward_group": meta["ward_group"],
+                              "asset": meta["asset"]}
         return "not_found", None
 
     def upsert_device(self, device_id: str, note: str, token_hash: str) -> bool:

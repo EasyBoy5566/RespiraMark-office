@@ -243,6 +243,7 @@ class TelemetryHub:
                  "online": st.online, "v": st.proto,
                  "connected_at": st.connected_at, "app_version": st.app_version,
                  "bed": meta.get("bed", ""), "ward": meta.get("ward", ""),
+                 "ward_group": meta.get("ward_group", ""),
                  "asset": meta.get("asset", "")}
             d.update(st.latest)          # 各 STATEFUL_TYPES 的最新一則
             devs.append(d)
@@ -262,6 +263,7 @@ class TelemetryHub:
             self.log.info(f"裝置清冊更新: {device}")
             self.broadcast({"type": "device_meta", "device": device,
                             "bed": data["bed"], "ward": data["ward"],
+                            "ward_group": data["ward_group"],
                             "asset": data["asset"]})
         return result, data
 

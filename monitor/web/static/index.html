@@ -8,10 +8,26 @@
 </head>
 <body>
   <!-- 頂端感應條：滑鼠碰到最上方才把狀態列滑出（平時收起，把空間讓給下方小卡）-->
-  <div id="top-peek"></div>
+  <div id="top-peek">
+    <!-- 過濾生效時的常駐提示：狀態列收起後仍看得到，免得有人忘了自己設過篩選，
+         把「被隱藏的床」誤判成「沒接上的床」（app.js updateWardFilterUi）-->
+    <span id="filterPeek" class="filter-peek hidden"></span>
+  </div>
   <header class="auto-hide">
     <div class="brand">VentMonitor</div>
     <div class="header-right">
+      <div class="ward-filter" id="wardFilter">
+        <button id="wardBtn" class="ward-btn" type="button"
+                aria-expanded="false" aria-haspopup="true"
+                title="選擇要顯示的單位">單位：全部 ▾</button>
+        <div id="wardPanel" class="ward-panel hidden" role="group" aria-label="顯示的單位">
+          <div class="ward-panel-head">
+            <button type="button" class="ward-mini" data-select-all="1">全選</button>
+            <button type="button" class="ward-mini" data-select-all="0">全不選</button>
+          </div>
+          <div id="wardPanelBody" class="ward-panel-body"></div>
+        </div>
+      </div>
       <label class="cols-picker">
         <span class="cols-picker-label">欄數</span>
         <select id="colsSelect" title="每列顯示幾張卡片（欄數越多卡片越精簡）">
